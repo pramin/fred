@@ -44,3 +44,9 @@ jobs:
         with:
           name: coverage-report
           path: coverage/report/
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage/**/coverage.cobertura.xml
+          fail_ci_if_error: false
