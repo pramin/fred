@@ -4,11 +4,6 @@ using System.Text;
 
 namespace FredDotNet;
 
-/// <summary>
-/// FredDotNet - Complete sed and grep implementation in one module.
-/// Contains Parser, FluentSed, SedScript, RegexTranslator, GrepEngine, and all supporting types.
-/// </summary>
-
 #region Core Types
 
 /// <summary>
@@ -2599,6 +2594,7 @@ public static class SedParser
     /// </summary>
     /// <param name="scriptText">The sed script text to parse.</param>
     /// <param name="suppressDefaultOutput">When true, suppresses automatic output (like sed -n).</param>
+    /// <param name="useEre">When true, uses Extended Regular Expressions instead of BRE.</param>
     /// <returns>A compiled SedScript ready for transformation.</returns>
     /// <exception cref="SedException">Thrown when scriptText is null, empty, or whitespace.</exception>
     public static SedScript Parse(string scriptText, bool suppressDefaultOutput = false, bool useEre = false)
