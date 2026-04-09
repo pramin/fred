@@ -1,0 +1,3 @@
+[submodule "ext/sed"]
+	path = ext/sed
+	url = https://git.savannah.gnu.org/git/sed.git

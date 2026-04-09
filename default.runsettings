@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Run test assemblies sequentially to prevent OS-level I/O contention
+     when SedValidation.Tests spawns 20 parallel subprocesses concurrently
+     with SedDotNet.Tests file I/O operations. -->
+<RunSettings>
+  <RunConfiguration>
+    <!-- Run each test DLL sequentially (1 process at a time).
+         Individual test parallelism within each DLL is still controlled
+         by NUnit [Parallelizable] attributes on each fixture. -->
+    <MaxCpuCount>1</MaxCpuCount>
+  </RunConfiguration>
+</RunSettings>
