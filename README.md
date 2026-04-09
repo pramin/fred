@@ -1,7 +1,6 @@
 # Fred
 
 [![CI](https://github.com/pramin/fred/actions/workflows/ci.yml/badge.svg)](https://github.com/pramin/fred/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/pramin/fred/graph/badge.svg)](https://codecov.io/gh/pramin/fred)
 
 **F**ind | g**RE**p | se**D** | AWK for .NET
 
