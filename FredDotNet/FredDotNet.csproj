@@ -5,6 +5,24 @@
     <LangVersion>12.0</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- NuGet package metadata -->
+    <PackageId>FredDotNet</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Paul Ramin</Authors>
+    <Description>High-performance find, grep, sed, and AWK engines for .NET. Compile-once, execute-many pattern. Thread-safe. No subprocess overhead. Designed as file editing infrastructure for AI coding tools.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/pramin/fred</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/pramin/fred.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>sed;grep;awk;find;text-processing;stream-editor;regex;ai-tools;mcp</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>CS1591</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
 
 </Project>
