@@ -12,17 +12,31 @@ namespace SedValidation.Tests;
 [Parallelizable(ParallelScope.Children)]
 public class SedCompatibilityTests
 {
-    private readonly string _nedPath;
+    private string _nedBin = string.Empty;
     private readonly string _tempDir;
 
     public SedCompatibilityTests()
     {
-        // Path to our ned executable
-        _nedPath = Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", "ned");
         _tempDir = Path.Combine(Path.GetTempPath(), "sed-validation-tests");
-
-        // Create temp directory if it doesn't exist
         Directory.CreateDirectory(_tempDir);
+    }
+
+    [OneTimeSetUp]
+    public void OneTimeSetUp()
+    {
+        // Build ned once, then use the compiled binary for all tests
+        var buildDir = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", ".."));
+        var psi = new ProcessStartInfo("dotnet", $"build {Path.Combine(buildDir, "ned", "ned.csproj")} -c Debug -o {Path.Combine(buildDir, "ned", "bin", "oracle-test")}")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        var proc = Process.Start(psi)!;
+        proc.WaitForExit(60000);
+        Assert.That(proc.ExitCode, Is.EqualTo(0), "ned build failed");
+
+        _nedBin = Path.Combine(buildDir, "ned", "bin", "oracle-test", "ned");
     }
 
     [SetUp]
@@ -1004,18 +1018,13 @@ public class SedCompatibilityTests
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = "dotnet",
+                    FileName = _nedBin,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true
                 }
             };
-
-            process.StartInfo.ArgumentList.Add("run");
-            process.StartInfo.ArgumentList.Add("--project");
-            process.StartInfo.ArgumentList.Add(_nedPath);
-            process.StartInfo.ArgumentList.Add("--");
 
             for (int i = 0; i < args.Length; i++)
                 process.StartInfo.ArgumentList.Add(args[i]);
@@ -1098,7 +1107,7 @@ public class SedCompatibilityTests
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = "dotnet",
+                    FileName = _nedBin,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -1106,10 +1115,6 @@ public class SedCompatibilityTests
                 }
             };
 
-            process.StartInfo.ArgumentList.Add("run");
-            process.StartInfo.ArgumentList.Add("--project");
-            process.StartInfo.ArgumentList.Add(_nedPath);
-            process.StartInfo.ArgumentList.Add("--");
             process.StartInfo.ArgumentList.Add(inPlaceFlag);
             process.StartInfo.ArgumentList.Add("-e");
             process.StartInfo.ArgumentList.Add(script);

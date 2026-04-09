@@ -13,19 +13,28 @@ namespace AwkValidation.Tests;
 public class AwkOracleTests
 {
     private const string AwkPath = "/usr/bin/awk";
-    private readonly string _nawkProjectPath;
+    private string _nawkBin = string.Empty;
     private string _tempDir = string.Empty;
-
-    public AwkOracleTests()
-    {
-        _nawkProjectPath = Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", "nawk");
-    }
 
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "awk-oracle-tests");
         Directory.CreateDirectory(_tempDir);
+
+        // Build nawk once, then use the compiled binary for all tests
+        var buildDir = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", ".."));
+        var psi = new ProcessStartInfo("dotnet", $"build {Path.Combine(buildDir, "nawk", "nawk.csproj")} -c Debug -o {Path.Combine(buildDir, "nawk", "bin", "oracle-test")}")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        var proc = Process.Start(psi)!;
+        proc.WaitForExit(60000);
+        Assert.That(proc.ExitCode, Is.EqualTo(0), "nawk build failed");
+
+        _nawkBin = Path.Combine(buildDir, "nawk", "bin", "oracle-test", "nawk");
     }
 
     [SetUp]
@@ -79,7 +88,7 @@ public class AwkOracleTests
     }
 
     /// <summary>
-    /// Run nawk (dotnet run) with the given arguments, providing input via stdin.
+    /// Run nawk binary with the given arguments, providing input via stdin.
     /// </summary>
     private (string Output, int ExitCode) RunNawkProcess(string[] args, string input)
     {
@@ -87,7 +96,7 @@ public class AwkOracleTests
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = "dotnet",
+                FileName = _nawkBin,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -95,11 +104,6 @@ public class AwkOracleTests
                 CreateNoWindow = true
             }
         };
-
-        process.StartInfo.ArgumentList.Add("run");
-        process.StartInfo.ArgumentList.Add("--project");
-        process.StartInfo.ArgumentList.Add(_nawkProjectPath);
-        process.StartInfo.ArgumentList.Add("--");
 
         for (int i = 0; i < args.Length; i++)
             process.StartInfo.ArgumentList.Add(args[i]);
@@ -180,18 +184,13 @@ public class AwkOracleTests
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = "dotnet",
+                    FileName = _nawkBin,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true
                 }
             };
-
-            nawkProcess.StartInfo.ArgumentList.Add("run");
-            nawkProcess.StartInfo.ArgumentList.Add("--project");
-            nawkProcess.StartInfo.ArgumentList.Add(_nawkProjectPath);
-            nawkProcess.StartInfo.ArgumentList.Add("--");
 
             for (int i = 0; i < args.Length; i++)
                 nawkProcess.StartInfo.ArgumentList.Add(args[i]);

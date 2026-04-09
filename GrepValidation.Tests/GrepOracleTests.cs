@@ -13,19 +13,28 @@ namespace GrepValidation.Tests;
 public class GrepOracleTests
 {
     private const string GrepPath = "/usr/bin/grep";
-    private readonly string _nrepPath;
+    private string _nrepBin = string.Empty;
     private string _tempDir = string.Empty;
-
-    public GrepOracleTests()
-    {
-        _nrepPath = Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", "nrep");
-    }
 
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "grep-oracle-tests");
         Directory.CreateDirectory(_tempDir);
+
+        // Build nrep once, then use the compiled binary for all tests
+        var buildDir = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", ".."));
+        var psi = new ProcessStartInfo("dotnet", $"build {Path.Combine(buildDir, "nrep", "nrep.csproj")} -c Debug -o {Path.Combine(buildDir, "nrep", "bin", "oracle-test")}")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        var proc = Process.Start(psi)!;
+        proc.WaitForExit(60000);
+        Assert.That(proc.ExitCode, Is.EqualTo(0), "nrep build failed");
+
+        _nrepBin = Path.Combine(buildDir, "nrep", "bin", "oracle-test", "nrep");
     }
 
     [SetUp]
@@ -184,7 +193,7 @@ public class GrepOracleTests
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = "dotnet",
+                FileName = _nrepBin,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -192,11 +201,6 @@ public class GrepOracleTests
                 CreateNoWindow = true
             }
         };
-
-        process.StartInfo.ArgumentList.Add("run");
-        process.StartInfo.ArgumentList.Add("--project");
-        process.StartInfo.ArgumentList.Add(_nrepPath);
-        process.StartInfo.ArgumentList.Add("--");
 
         for (int i = 0; i < args.Length; i++)
             process.StartInfo.ArgumentList.Add(args[i]);
@@ -247,18 +251,13 @@ public class GrepOracleTests
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = "dotnet",
+                FileName = _nrepBin,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             }
         };
-
-        process.StartInfo.ArgumentList.Add("run");
-        process.StartInfo.ArgumentList.Add("--project");
-        process.StartInfo.ArgumentList.Add(_nrepPath);
-        process.StartInfo.ArgumentList.Add("--");
 
         for (int i = 0; i < args.Length; i++)
             process.StartInfo.ArgumentList.Add(args[i]);
