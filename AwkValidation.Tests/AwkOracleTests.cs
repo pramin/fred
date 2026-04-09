@@ -13,12 +13,12 @@ namespace AwkValidation.Tests;
 public class AwkOracleTests
 {
     private const string AwkPath = "/usr/bin/awk";
-    private readonly string _nawkPath;
+    private readonly string _nawkProjectPath;
     private string _tempDir = string.Empty;
 
     public AwkOracleTests()
     {
-        _nawkPath = Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", "nawk", "bin", "Debug", "net8.0", "nawk");
+        _nawkProjectPath = Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", "nawk");
     }
 
     [OneTimeSetUp]
@@ -87,7 +87,7 @@ public class AwkOracleTests
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = _nawkPath,
+                FileName = "dotnet",
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -95,6 +95,11 @@ public class AwkOracleTests
                 CreateNoWindow = true
             }
         };
+
+        process.StartInfo.ArgumentList.Add("run");
+        process.StartInfo.ArgumentList.Add("--project");
+        process.StartInfo.ArgumentList.Add(_nawkProjectPath);
+        process.StartInfo.ArgumentList.Add("--");
 
         for (int i = 0; i < args.Length; i++)
             process.StartInfo.ArgumentList.Add(args[i]);
@@ -175,13 +180,18 @@ public class AwkOracleTests
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = _nawkPath,
+                    FileName = "dotnet",
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true
                 }
             };
+
+            nawkProcess.StartInfo.ArgumentList.Add("run");
+            nawkProcess.StartInfo.ArgumentList.Add("--project");
+            nawkProcess.StartInfo.ArgumentList.Add(_nawkProjectPath);
+            nawkProcess.StartInfo.ArgumentList.Add("--");
 
             for (int i = 0; i < args.Length; i++)
                 nawkProcess.StartInfo.ArgumentList.Add(args[i]);
