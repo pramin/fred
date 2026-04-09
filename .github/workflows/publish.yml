@@ -21,8 +21,13 @@ jobs:
       - name: Test
         run: dotnet test Fred.sln -c Release --no-build
 
-      - name: Pack
+      - name: Pack FredDotNet (library)
         run: dotnet pack FredDotNet/FredDotNet.csproj -c Release --no-build -p:Version=${GITHUB_REF_NAME#v}
 
+      - name: Pack FredMCP (dotnet tool)
+        run: dotnet pack fred-mcp/fred-mcp.csproj -c Release --no-build -p:Version=${GITHUB_REF_NAME#v}
+
       - name: Push to NuGet
-        run: dotnet nuget push FredDotNet/bin/Release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: |
+          dotnet nuget push FredDotNet/bin/Release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push fred-mcp/bin/Release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
