@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -21,9 +22,28 @@ public static class McpServer
     private static readonly LruCache<string, AwkScript> s_awkCache = new(64);
     private static readonly LruCache<string, List<string>> s_findCache = new(16);
 
+    private static readonly string s_stateDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".fred-mcp");
+
     public static async Task<int> Main(string[] args)
     {
+        // Handle --install command
+        if (args.Length > 0 && args[0] == "--install")
+        {
+            return Install(args.Length > 1 ? args[1] : "all");
+        }
+
+        // Handle --version
+        if (args.Length > 0 && args[0] == "--version")
+        {
+            Console.WriteLine($"{ServerName} {ServerVersion}");
+            return 0;
+        }
+
         Console.Error.WriteLine($"{ServerName} v{ServerVersion} starting...");
+
+        // Background auto-update check (non-blocking)
+        _ = Task.Run(CheckForUpdate);
 
         try
         {
@@ -34,6 +54,236 @@ public static class McpServer
         {
             Console.Error.WriteLine($"{ServerName}: fatal error: {ex.Message}");
             return 1;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // --install: update tool + configure MCP for claude/vscode/copilot
+    // -------------------------------------------------------------------------
+
+    private static int Install(string target)
+    {
+        Console.WriteLine($"fred-mcp install: updating to latest version...");
+
+        // Update the tool (no-op if already latest)
+        var update = Process.Start(new ProcessStartInfo("dotnet", "tool update -g FredMCP")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        });
+        if (update != null)
+        {
+            string output = update.StandardOutput.ReadToEnd();
+            string error = update.StandardError.ReadToEnd();
+            update.WaitForExit();
+            if (output.Length > 0) Console.WriteLine(output.TrimEnd());
+            if (update.ExitCode != 0 && error.Length > 0) Console.Error.WriteLine(error.TrimEnd());
+        }
+
+        string command = "fred-mcp";
+
+        bool all = target == "all";
+        bool any = false;
+
+        if (all || target == "claude")
+        {
+            any = true;
+            InstallClaude(command);
+        }
+        if (all || target == "vscode")
+        {
+            any = true;
+            InstallVSCode(command);
+        }
+
+        if (!any)
+        {
+            Console.Error.WriteLine($"Unknown target: {target}");
+            Console.Error.WriteLine("Usage: fred-mcp --install [claude|vscode|all]");
+            return 1;
+        }
+
+        return 0;
+    }
+
+    private static void InstallClaude(string command)
+    {
+        // Claude Code: ~/.claude.json with "mcpServers" key
+        string configPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json");
+
+        JsonElement root = default;
+
+        if (File.Exists(configPath))
+        {
+            try
+            {
+                string existing = File.ReadAllText(configPath);
+                using var doc = JsonDocument.Parse(existing);
+                root = doc.RootElement.Clone();
+            }
+            catch { }
+        }
+
+        // Build new config preserving existing content
+        using var ms = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
+        {
+            writer.WriteStartObject();
+
+            // Copy existing properties
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in root.EnumerateObject())
+                {
+                    if (prop.Name == "mcpServers") continue; // we'll write our own
+                    prop.WriteTo(writer);
+                }
+            }
+
+            // Write mcpServers, merging with existing
+            writer.WritePropertyName("mcpServers");
+            writer.WriteStartObject();
+
+            // Copy existing servers
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("mcpServers", out var existingServers) &&
+                existingServers.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in existingServers.EnumerateObject())
+                {
+                    if (prop.Name == "fred") continue; // we'll overwrite
+                    prop.WriteTo(writer);
+                }
+            }
+
+            // Add/update fred
+            writer.WritePropertyName("fred");
+            writer.WriteStartObject();
+            writer.WriteString("command", command);
+            writer.WriteEndObject();
+
+            writer.WriteEndObject(); // mcpServers
+            writer.WriteEndObject(); // root
+        }
+
+        File.WriteAllText(configPath, Encoding.UTF8.GetString(ms.ToArray()));
+        Console.WriteLine($"  Claude Code: configured in {configPath}");
+    }
+
+    private static void InstallVSCode(string command)
+    {
+        // VS Code: .vscode/mcp.json with "servers" key (workspace-level)
+        // Also check user-level settings
+        string workspacePath = Path.Combine(Directory.GetCurrentDirectory(), ".vscode", "mcp.json");
+
+        JsonElement root = default;
+
+        if (File.Exists(workspacePath))
+        {
+            try
+            {
+                string existing = File.ReadAllText(workspacePath);
+                using var doc = JsonDocument.Parse(existing);
+                root = doc.RootElement.Clone();
+            }
+            catch { }
+        }
+        else
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(workspacePath)!);
+        }
+
+        using var ms = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
+        {
+            writer.WriteStartObject();
+
+            // Copy existing properties
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in root.EnumerateObject())
+                {
+                    if (prop.Name == "servers") continue;
+                    prop.WriteTo(writer);
+                }
+            }
+
+            writer.WritePropertyName("servers");
+            writer.WriteStartObject();
+
+            // Copy existing servers
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("servers", out var existingServers) &&
+                existingServers.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in existingServers.EnumerateObject())
+                {
+                    if (prop.Name == "fred") continue;
+                    prop.WriteTo(writer);
+                }
+            }
+
+            writer.WritePropertyName("fred");
+            writer.WriteStartObject();
+            writer.WriteString("type", "stdio");
+            writer.WriteString("command", command);
+            writer.WriteEndObject();
+
+            writer.WriteEndObject(); // servers
+            writer.WriteEndObject(); // root
+        }
+
+        File.WriteAllText(workspacePath, Encoding.UTF8.GetString(ms.ToArray()));
+        Console.WriteLine($"  VS Code: configured in {workspacePath}");
+    }
+
+    // -------------------------------------------------------------------------
+    // Auto-update: check once per day, run in background on startup
+    // -------------------------------------------------------------------------
+
+    private static void CheckForUpdate()
+    {
+        try
+        {
+            Directory.CreateDirectory(s_stateDir);
+            string timestampFile = Path.Combine(s_stateDir, "last-update-check");
+
+            // Check if we already checked today
+            if (File.Exists(timestampFile))
+            {
+                var lastCheck = File.GetLastWriteTimeUtc(timestampFile);
+                if ((DateTime.UtcNow - lastCheck).TotalHours < 24)
+                    return;
+            }
+
+            Console.Error.WriteLine($"{ServerName}: checking for updates...");
+
+            var proc = Process.Start(new ProcessStartInfo("dotnet", "tool update -g FredMCP")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            });
+
+            if (proc != null)
+            {
+                string output = proc.StandardOutput.ReadToEnd();
+                proc.WaitForExit();
+
+                if (output.Contains("was updated") || output.Contains("was reinstalled"))
+                    Console.Error.WriteLine($"{ServerName}: updated! Restart to use new version.");
+                else
+                    Console.Error.WriteLine($"{ServerName}: up to date.");
+            }
+
+            // Touch timestamp file
+            File.WriteAllText(timestampFile, DateTime.UtcNow.ToString("o"));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"{ServerName}: update check failed: {ex.Message}");
         }
     }
 
@@ -212,35 +462,45 @@ public static class McpServer
                 },
                 {
                     "name": "pipeline",
-                    "description": "Execute a find->grep->sed/awk pipeline. Find files, filter by content, transform. Returns structured JSON with file paths, line numbers, and content. Can modify files in-place.",
+                    "description": "Execute an array of stages: find, grep, sed, awk. Each stage feeds its output to the next. The first stage can be a find (returns file list) or any text stage reading from input. Supports in-place file editing and dry-run diffs.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "path": {"type": "string", "default": "."},
-                            "name": {"type": "string", "description": "Filename glob pattern"},
-                            "iname": {"type": "string", "description": "Case-insensitive filename glob"},
-                            "type": {"type": "string", "enum": ["f", "d"]},
-                            "size": {"type": "string", "description": "Size filter"},
-                            "maxdepth": {"type": "integer"},
-                            "mindepth": {"type": "integer"},
-                            "prune": {"type": "array", "items": {"type": "string"}, "description": "Directory names to skip"},
-                            "containing": {"type": "string", "description": "Filter files containing this pattern"},
-                            "grepIgnoreCase": {"type": "boolean", "description": "Case-insensitive grep"},
-                            "grepInvertMatch": {"type": "boolean", "description": "Invert grep match"},
-                            "grepWholeWord": {"type": "boolean", "description": "Grep whole words only"},
-                            "grepFixedStrings": {"type": "boolean", "description": "Treat grep pattern as literal"},
-                            "grepUseERE": {"type": "boolean", "description": "Use ERE for grep pattern"},
-                            "sedScript": {"type": "string", "description": "Sed script to apply to matching files"},
-                            "sedSuppressDefault": {"type": "boolean", "description": "Suppress sed default output (-n)"},
-                            "sedUseEre": {"type": "boolean", "description": "Use ERE for sed script"},
-                            "awkProgram": {"type": "string", "description": "AWK program to apply"},
-                            "awkFieldSep": {"type": "string"},
-                            "awkVariables": {"type": "object", "additionalProperties": {"type": "string"}, "description": "AWK variables"},
-                            "inPlace": {"type": "boolean", "default": false},
-                            "backup": {"type": "string"},
-                            "dryRun": {"type": "boolean", "default": false}
+                            "stages": {
+                                "type": "array",
+                                "description": "Ordered array of processing stages. Each stage has a 'tool' key and tool-specific options.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "tool": {"type": "string", "enum": ["find", "grep", "sed", "awk"], "description": "Which tool to run at this stage"},
+                                        "path": {"type": "string", "description": "find: starting directory"},
+                                        "name": {"type": "string", "description": "find: filename glob pattern"},
+                                        "iname": {"type": "string", "description": "find: case-insensitive glob"},
+                                        "type": {"type": "string", "enum": ["f", "d", "l"], "description": "find: file type"},
+                                        "size": {"type": "string", "description": "find: size filter"},
+                                        "maxdepth": {"type": "integer", "description": "find: max directory depth"},
+                                        "mindepth": {"type": "integer", "description": "find: min directory depth"},
+                                        "prune": {"type": "array", "items": {"type": "string"}, "description": "find: directories to skip"},
+                                        "pattern": {"type": "string", "description": "grep: search pattern"},
+                                        "ignoreCase": {"type": "boolean", "description": "grep: case-insensitive"},
+                                        "invertMatch": {"type": "boolean", "description": "grep: invert match"},
+                                        "wholeWord": {"type": "boolean", "description": "grep: whole words only"},
+                                        "fixedStrings": {"type": "boolean", "description": "grep: literal string match"},
+                                        "useERE": {"type": "boolean", "description": "grep/sed: extended regex"},
+                                        "script": {"type": "string", "description": "sed: transformation script"},
+                                        "suppressDefault": {"type": "boolean", "description": "sed: suppress default output (-n)"},
+                                        "program": {"type": "string", "description": "awk: AWK program"},
+                                        "fieldSeparator": {"type": "string", "description": "awk: field separator"},
+                                        "variables": {"type": "object", "additionalProperties": {"type": "string"}, "description": "awk: variables"}
+                                    },
+                                    "required": ["tool"]
+                                }
+                            },
+                            "inPlace": {"type": "boolean", "description": "Write changes back to files found by find stage", "default": false},
+                            "backup": {"type": "string", "description": "Backup suffix when editing in-place (e.g. '.bak')"},
+                            "dryRun": {"type": "boolean", "description": "Show unified diff without modifying files", "default": false}
                         },
-                        "required": ["path"]
+                        "required": ["stages"]
                     }
                 }
             ]
@@ -796,15 +1056,59 @@ public static class McpServer
 
         var a = args.Value;
 
-        string path = a.TryGetProperty("path", out var pathEl) ? pathEl.GetString() ?? "." : ".";
-        string? name = a.TryGetProperty("name", out var nameEl) ? nameEl.GetString() : null;
-        string? iname = a.TryGetProperty("iname", out var inameEl) ? inameEl.GetString() : null;
-        string? type = a.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
-        string? size = a.TryGetProperty("size", out var sizeEl) ? sizeEl.GetString() : null;
-        int? maxdepth = a.TryGetProperty("maxdepth", out var mdEl) ? mdEl.GetInt32() : null;
-        int? mindepth = a.TryGetProperty("mindepth", out var minEl) ? minEl.GetInt32() : null;
+        if (!a.TryGetProperty("stages", out var stagesEl) || stagesEl.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("Missing or invalid 'stages' array");
+
+        bool inPlace = a.TryGetProperty("inPlace", out var ipEl) && ipEl.GetBoolean();
+        bool dryRun = a.TryGetProperty("dryRun", out var drEl) && drEl.GetBoolean();
+        string? backup = a.TryGetProperty("backup", out var bEl) ? bEl.GetString() : null;
+
+        // Parse stages
+        var stages = new List<PipelineStage>();
+        foreach (var stageEl in stagesEl.EnumerateArray())
+        {
+            string tool = stageEl.TryGetProperty("tool", out var toolEl)
+                ? toolEl.GetString() ?? ""
+                : throw new ArgumentException("Each stage must have a 'tool' key");
+            stages.Add(new PipelineStage(tool, stageEl));
+        }
+
+        if (stages.Count == 0)
+            throw new ArgumentException("Pipeline must have at least one stage");
+
+        // Phase 1: If first stage is find, get file list; otherwise treat as text pipeline
+        List<string>? files = null;
+        int firstTextStage = 0;
+
+        if (stages[0].Tool == "find")
+        {
+            files = ExecuteFindStage(stages[0]);
+            firstTextStage = 1;
+        }
+
+        // If we have files, process each file through remaining stages
+        if (files != null)
+        {
+            return ExecuteFilesPipeline(files, stages, firstTextStage, inPlace, dryRun, backup);
+        }
+
+        // Text-only pipeline (no find stage): not file-based, just chain text stages
+        // This shouldn't normally happen in practice but handle gracefully
+        throw new ArgumentException("Pipeline must start with a find stage to locate files");
+    }
+
+    private static List<string> ExecuteFindStage(PipelineStage stage)
+    {
+        var s = stage.Element;
+        string path = s.TryGetProperty("path", out var pathEl) ? pathEl.GetString() ?? "." : ".";
+        string? name = s.TryGetProperty("name", out var nameEl) ? nameEl.GetString() : null;
+        string? iname = s.TryGetProperty("iname", out var inameEl) ? inameEl.GetString() : null;
+        string? type = s.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+        string? size = s.TryGetProperty("size", out var sizeEl) ? sizeEl.GetString() : null;
+        int? maxdepth = s.TryGetProperty("maxdepth", out var mdEl) ? mdEl.GetInt32() : null;
+        int? mindepth = s.TryGetProperty("mindepth", out var minEl) ? minEl.GetInt32() : null;
         string[]? prune = null;
-        if (a.TryGetProperty("prune", out var pruneEl) && pruneEl.ValueKind == JsonValueKind.Array)
+        if (s.TryGetProperty("prune", out var pruneEl) && pruneEl.ValueKind == JsonValueKind.Array)
         {
             var pruneList = new List<string>();
             foreach (var item in pruneEl.EnumerateArray())
@@ -814,61 +1118,28 @@ public static class McpServer
             }
             if (pruneList.Count > 0) prune = pruneList.ToArray();
         }
-        string? containing = a.TryGetProperty("containing", out var contEl) ? contEl.GetString() : null;
-        bool grepIgnoreCase = a.TryGetProperty("grepIgnoreCase", out var gicEl) && gicEl.GetBoolean();
-        bool grepInvertMatch = a.TryGetProperty("grepInvertMatch", out var givEl) && givEl.GetBoolean();
-        bool grepWholeWord = a.TryGetProperty("grepWholeWord", out var gwwEl) && gwwEl.GetBoolean();
-        bool grepFixedStrings = a.TryGetProperty("grepFixedStrings", out var gfsEl) && gfsEl.GetBoolean();
-        bool grepUseERE = a.TryGetProperty("grepUseERE", out var gueEl) && gueEl.GetBoolean();
-        string? sedScript = a.TryGetProperty("sedScript", out var sedEl) ? sedEl.GetString() : null;
-        bool sedSuppressDefault = a.TryGetProperty("sedSuppressDefault", out var ssdEl) && ssdEl.GetBoolean();
-        bool sedUseEre = a.TryGetProperty("sedUseEre", out var sueEl) && sueEl.GetBoolean();
-        string? awkProgram = a.TryGetProperty("awkProgram", out var awkEl) ? awkEl.GetString() : null;
-        string? awkFieldSep = a.TryGetProperty("awkFieldSep", out var afsEl) ? afsEl.GetString() : null;
-        Dictionary<string, string>? awkVariables = null;
-        if (a.TryGetProperty("awkVariables", out var avEl) && avEl.ValueKind == JsonValueKind.Object)
-        {
-            awkVariables = new Dictionary<string, string>();
-            foreach (var prop in avEl.EnumerateObject())
-            {
-                string? val = prop.Value.GetString();
-                if (val != null) awkVariables[prop.Name] = val;
-            }
-        }
-        bool inPlace = a.TryGetProperty("inPlace", out var ipEl) && ipEl.GetBoolean();
-        bool dryRun = a.TryGetProperty("dryRun", out var drEl) && drEl.GetBoolean();
-        string? backup = a.TryGetProperty("backup", out var bEl) ? bEl.GetString() : null;
 
-        // Build find args using the shared helper
         var findArgs = BuildFindArgs(path, name, iname, pathPattern: null, type, size, maxdepth, mindepth,
             mtime: null, mmin: null, newer: null, empty: false, prune, print0: false);
+        return ExecuteFindCached(findArgs);
+    }
 
-        var files = ExecuteFindCached(findArgs);
-
-        // Compile grep for containing filter (with line numbers for structured output)
-        GrepScript? grepFilter = null;
-        GrepScript? grepWithLines = null;
-        if (containing != null)
+    private static string ExecuteFilesPipeline(List<string> files, List<PipelineStage> stages,
+        int firstTextStage, bool inPlace, bool dryRun, string? backup)
+    {
+        // Pre-compile all text stages
+        var compiledStages = new List<CompiledStage>();
+        for (int i = firstTextStage; i < stages.Count; i++)
         {
-            grepFilter = GetOrCompileGrep(containing, ignoreCase: grepIgnoreCase,
-                invertMatch: grepInvertMatch, wholeWord: grepWholeWord,
-                fixedStrings: grepFixedStrings, useERE: grepUseERE);
-            grepWithLines = GetOrCompileGrep(containing, ignoreCase: grepIgnoreCase,
-                lineNumbers: true, suppressFilename: true,
-                invertMatch: grepInvertMatch, wholeWord: grepWholeWord,
-                fixedStrings: grepFixedStrings, useERE: grepUseERE);
+            compiledStages.Add(CompileStage(stages[i]));
         }
-
-        // Compile sed/awk
-        SedScript? compiledSed = sedScript != null ? GetOrCompileSed(sedScript, sedSuppressDefault, sedUseEre) : null;
-        AwkScript? compiledAwk = awkProgram != null ? GetOrCompileAwk(awkProgram) : null;
 
         var result = new FredResult();
         int filesModified = 0;
 
-        for (int i = 0; i < files.Count; i++)
+        for (int fi = 0; fi < files.Count; fi++)
         {
-            string filePath = files[i];
+            string filePath = files[fi];
             if (!File.Exists(filePath))
                 continue;
 
@@ -878,121 +1149,108 @@ public static class McpServer
             try { content = File.ReadAllText(filePath); }
             catch { continue; }
 
-            // Apply containing filter
-            if (grepFilter != null)
+            // Run each text stage in sequence
+            string current = content;
+            bool filtered = false;
+
+            for (int si = 0; si < compiledStages.Count; si++)
             {
-                var sw = new StringWriter();
-                int grepResult = grepFilter.Execute(new StringReader(content), sw);
-                if (grepResult != 0)
-                    continue;
+                var cs = compiledStages[si];
+
+                switch (cs.Tool)
+                {
+                    case "grep":
+                    {
+                        var sw = new StringWriter();
+                        int exitCode = cs.Grep!.Execute(new StringReader(current), sw);
+                        if (exitCode != 0)
+                        {
+                            filtered = true;
+                            break;
+                        }
+                        // For intermediate grep stages, pass matched content forward
+                        // For the last stage, keep line-numbered output for structured result
+                        if (si < compiledStages.Count - 1)
+                        {
+                            // Strip line numbers for intermediate stages so downstream sees plain text
+                            current = StripLineNumbers(sw.ToString());
+                        }
+                        else
+                        {
+                            current = sw.ToString();
+                        }
+                        break;
+                    }
+                    case "sed":
+                    {
+                        current = cs.Sed!.Transform(current);
+                        break;
+                    }
+                    case "awk":
+                    {
+                        var (awkOut, _) = cs.Awk!.Execute(current, cs.AwkFieldSep, cs.AwkVariables);
+                        current = awkOut;
+                        break;
+                    }
+                }
+
+                if (filtered) break;
             }
+
+            if (filtered) continue;
 
             result.FilesMatched++;
 
-            if (compiledSed != null)
-            {
-                string transformed = compiledSed.Transform(content);
+            // Determine if the last stage was a transformation (sed/awk) or a filter (grep)
+            bool hasTransform = compiledStages.Count > 0 &&
+                (compiledStages[^1].Tool == "sed" || compiledStages[^1].Tool == "awk");
 
-                if (inPlace && content != transformed)
+            if (hasTransform && (inPlace || dryRun))
+            {
+                // File modification mode
+                var fileMatch = new FredFileMatch { File = filePath };
+                string[] origLines = content.Split('\n');
+                string[] modLines = current.Split('\n');
+
+                for (int li = 0; li < origLines.Length; li++)
                 {
-                    if (backup != null)
-                        File.WriteAllText(filePath + backup, content);
-                    File.WriteAllText(filePath, transformed);
+                    string origLine = origLines[li];
+                    string? modLine = (li < modLines.Length) ? modLines[li] : null;
+                    if (modLine != null && origLine != modLine)
+                    {
+                        fileMatch.Lines.Add(new FredLineMatch
+                        {
+                            Number = li + 1,
+                            Content = origLine,
+                            Replacement = modLine,
+                        });
+                    }
+                }
+
+                if (content != current)
+                {
+                    if (inPlace)
+                    {
+                        if (backup != null)
+                            File.WriteAllText(filePath + backup, content);
+                        File.WriteAllText(filePath, current);
+                    }
                     filesModified++;
                 }
 
-                // Always populate structured matches for sed
-                var fileMatch = new FredFileMatch { File = filePath };
-
-                if (dryRun || inPlace)
-                {
-                    // Show only changed lines
-                    string[] origLines = content.Split('\n');
-                    string[] modLines = transformed.Split('\n');
-                    for (int li = 0; li < origLines.Length; li++)
-                    {
-                        string origLine = origLines[li];
-                        string? modLine = (li < modLines.Length) ? modLines[li] : null;
-                        if (modLine != null && origLine != modLine)
-                        {
-                            fileMatch.Lines.Add(new FredLineMatch
-                            {
-                                Number = li + 1,
-                                Content = origLine,
-                                Replacement = modLine,
-                            });
-                        }
-                    }
-                    if (!inPlace && content == transformed)
-                    {
-                        // No changes in dry-run, skip
-                    }
-                    else if (fileMatch.Lines.Count > 0)
-                    {
-                        result.Matches.Add(fileMatch);
-                        if (dryRun && content != transformed)
-                            filesModified++;
-                    }
-                }
-                else
-                {
-                    // stdout mode: show all lines with replacements where changed
-                    string[] origLines = content.Split('\n');
-                    string[] modLines = transformed.Split('\n');
-                    for (int li = 0; li < origLines.Length; li++)
-                    {
-                        string origLine = origLines[li];
-                        string? modLine = (li < modLines.Length) ? modLines[li] : null;
-                        if (modLine != null && origLine != modLine)
-                        {
-                            fileMatch.Lines.Add(new FredLineMatch
-                            {
-                                Number = li + 1,
-                                Content = origLine,
-                                Replacement = modLine,
-                            });
-                        }
-                    }
-                    if (fileMatch.Lines.Count > 0)
-                    {
-                        result.Matches.Add(fileMatch);
-                    }
-                }
-            }
-            else if (compiledAwk != null)
-            {
-                var (awkResult, _) = compiledAwk.Execute(content, awkFieldSep, awkVariables);
-                var fileMatch = new FredFileMatch { File = filePath };
-                string[] awkLines = awkResult.Split('\n');
-                for (int li = 0; li < awkLines.Length; li++)
-                {
-                    if (awkLines[li].Length == 0 && li == awkLines.Length - 1)
-                        continue;
-                    fileMatch.Lines.Add(new FredLineMatch
-                    {
-                        Number = li + 1,
-                        Content = awkLines[li],
-                    });
-                }
                 if (fileMatch.Lines.Count > 0)
                     result.Matches.Add(fileMatch);
             }
-            else if (grepWithLines != null)
+            else if (compiledStages.Count > 0 && compiledStages[^1].Tool == "grep")
             {
-                // Find+grep only: capture matching lines with line numbers
-                var sw = new StringWriter();
-                grepWithLines.Execute(new StringReader(content), sw);
-                string grepText = sw.ToString();
-
+                // Last stage is grep: show matching lines with line numbers
                 var fileMatch = new FredFileMatch { File = filePath };
-                string[] lines = grepText.Split('\n');
+                string[] lines = current.Split('\n');
                 for (int li = 0; li < lines.Length; li++)
                 {
                     string line = lines[li];
-                    if (line.Length == 0 && li == lines.Length - 1)
-                        continue;
+                    if (line.Length == 0 && li == lines.Length - 1) continue;
 
-                    // Parse "linenum:content" format
                     int colonIdx = line.IndexOf(':');
                     if (colonIdx > 0 && int.TryParse(line.AsSpan(0, colonIdx), out int lineNum))
                     {
@@ -1004,10 +1262,29 @@ public static class McpServer
                     }
                     else
                     {
+                        fileMatch.Lines.Add(new FredLineMatch { Number = li + 1, Content = line });
+                    }
+                }
+                if (fileMatch.Lines.Count > 0)
+                    result.Matches.Add(fileMatch);
+            }
+            else if (hasTransform)
+            {
+                // Transform without in-place: show changed lines
+                var fileMatch = new FredFileMatch { File = filePath };
+                string[] origLines = content.Split('\n');
+                string[] modLines = current.Split('\n');
+                for (int li = 0; li < origLines.Length; li++)
+                {
+                    string origLine = origLines[li];
+                    string? modLine = (li < modLines.Length) ? modLines[li] : null;
+                    if (modLine != null && origLine != modLine)
+                    {
                         fileMatch.Lines.Add(new FredLineMatch
                         {
                             Number = li + 1,
-                            Content = line,
+                            Content = origLine,
+                            Replacement = modLine,
                         });
                     }
                 }
@@ -1016,14 +1293,100 @@ public static class McpServer
             }
             else
             {
-                // Find-only with no filter: just list file paths
+                // Find-only: list file paths
                 result.Matches.Add(new FredFileMatch { File = filePath });
             }
         }
 
         result.FilesModified = filesModified;
-
         return result.ToJson();
+    }
+
+    private static CompiledStage CompileStage(PipelineStage stage)
+    {
+        var s = stage.Element;
+
+        switch (stage.Tool)
+        {
+            case "grep":
+            {
+                string pattern = s.TryGetProperty("pattern", out var pEl)
+                    ? pEl.GetString() ?? ""
+                    : throw new ArgumentException("grep stage requires 'pattern'");
+                bool ignoreCase = s.TryGetProperty("ignoreCase", out var icEl) && icEl.GetBoolean();
+                bool invertMatch = s.TryGetProperty("invertMatch", out var ivEl) && ivEl.GetBoolean();
+                bool wholeWord = s.TryGetProperty("wholeWord", out var wwEl) && wwEl.GetBoolean();
+                bool fixedStrings = s.TryGetProperty("fixedStrings", out var fsEl) && fsEl.GetBoolean();
+                bool useERE = s.TryGetProperty("useERE", out var ereEl) && ereEl.GetBoolean();
+
+                var compiled = GetOrCompileGrep(pattern, ignoreCase,
+                    lineNumbers: true, suppressFilename: true,
+                    invertMatch: invertMatch, wholeWord: wholeWord,
+                    fixedStrings: fixedStrings, useERE: useERE);
+                return new CompiledStage("grep") { Grep = compiled };
+            }
+            case "sed":
+            {
+                string script = s.TryGetProperty("script", out var sEl)
+                    ? sEl.GetString() ?? ""
+                    : throw new ArgumentException("sed stage requires 'script'");
+                bool suppress = s.TryGetProperty("suppressDefault", out var sdEl) && sdEl.GetBoolean();
+                bool useEre = s.TryGetProperty("useERE", out var ueEl) && ueEl.GetBoolean();
+                var compiled = GetOrCompileSed(script, suppress, useEre);
+                return new CompiledStage("sed") { Sed = compiled };
+            }
+            case "awk":
+            {
+                string program = s.TryGetProperty("program", out var pEl)
+                    ? pEl.GetString() ?? ""
+                    : throw new ArgumentException("awk stage requires 'program'");
+                string? fieldSep = s.TryGetProperty("fieldSeparator", out var fsEl) ? fsEl.GetString() : null;
+                Dictionary<string, string>? variables = null;
+                if (s.TryGetProperty("variables", out var vEl) && vEl.ValueKind == JsonValueKind.Object)
+                {
+                    variables = new Dictionary<string, string>();
+                    foreach (var prop in vEl.EnumerateObject())
+                    {
+                        string? val = prop.Value.GetString();
+                        if (val != null) variables[prop.Name] = val;
+                    }
+                }
+                var compiled = GetOrCompileAwk(program);
+                return new CompiledStage("awk") { Awk = compiled, AwkFieldSep = fieldSep, AwkVariables = variables };
+            }
+            default:
+                throw new ArgumentException($"Unknown stage tool: {stage.Tool}");
+        }
+    }
+
+    private static string StripLineNumbers(string grepOutput)
+    {
+        var sb = new StringBuilder();
+        var lines = grepOutput.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            if (line.Length == 0 && i == lines.Length - 1) continue;
+
+            int colonIdx = line.IndexOf(':');
+            if (colonIdx > 0 && int.TryParse(line.AsSpan(0, colonIdx), out _))
+                sb.AppendLine(line.Substring(colonIdx + 1));
+            else
+                sb.AppendLine(line);
+        }
+        return sb.ToString();
+    }
+
+    private sealed record PipelineStage(string Tool, JsonElement Element);
+
+    private sealed class CompiledStage(string tool)
+    {
+        public string Tool { get; } = tool;
+        public GrepScript? Grep { get; init; }
+        public SedScript? Sed { get; init; }
+        public AwkScript? Awk { get; init; }
+        public string? AwkFieldSep { get; init; }
+        public Dictionary<string, string>? AwkVariables { get; init; }
     }
 
     private static string? HandleUnknownMethod(JsonElement? id, string? method)
