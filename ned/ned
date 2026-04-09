@@ -1,0 +1,3 @@
+#!/bin/bash
+# ned - New sed - SedDotNet command line wrapper
+exec dotnet "$(dirname "$0")/bin/Debug/net8.0/ned.dll" "$@"
