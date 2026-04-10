@@ -9,7 +9,7 @@
 
     <!-- dotnet tool packaging -->
     <PackAsTool>true</PackAsTool>
-    <ToolCommandName>fred-mcp</ToolCommandName>
+    <ToolCommandName>freds-mcp</ToolCommandName>
     <PackageId>FredsMCP</PackageId>
     <Version>1.0.0</Version>
     <Authors>Paul Ramin</Authors>

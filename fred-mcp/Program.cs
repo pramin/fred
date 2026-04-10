@@ -12,7 +12,7 @@ namespace FredMcp;
 /// </summary>
 public static class McpServer
 {
-    private const string ServerName = "fred-mcp";
+    private const string ServerName = "freds-mcp";
     private const string ServerVersion = "1.0.0";
     private const string ProtocolVersion = "2024-11-05";
 
@@ -81,7 +81,7 @@ public static class McpServer
             if (update.ExitCode != 0 && error.Length > 0) Console.Error.WriteLine(error.TrimEnd());
         }
 
-        string command = "fred-mcp";
+        string command = "freds-mcp";
 
         bool all = target == "all";
         bool any = false;
