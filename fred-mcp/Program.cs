@@ -472,7 +472,7 @@ public static class McpServer
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "tool": {"type": "string", "enum": ["find", "grep", "sed", "awk"], "description": "Which tool to run at this stage"},
+                                        "tool": {"type": "string", "enum": ["find", "grep", "sed", "awk", "edit"], "description": "Which tool to run at this stage"},
                                         "path": {"type": "string", "description": "find: starting directory"},
                                         "name": {"type": "string", "description": "find: filename glob pattern"},
                                         "iname": {"type": "string", "description": "find: case-insensitive glob"},
@@ -491,7 +491,10 @@ public static class McpServer
                                         "suppressDefault": {"type": "boolean", "description": "sed: suppress default output (-n)"},
                                         "program": {"type": "string", "description": "awk: AWK program"},
                                         "fieldSeparator": {"type": "string", "description": "awk: field separator"},
-                                        "variables": {"type": "object", "additionalProperties": {"type": "string"}, "description": "awk: variables"}
+                                        "variables": {"type": "object", "additionalProperties": {"type": "string"}, "description": "awk: variables"},
+                                        "old": {"type": "string", "description": "edit: exact string to find (literal, no regex)"},
+                                        "new": {"type": "string", "description": "edit: replacement string"},
+                                        "replaceAll": {"type": "boolean", "description": "edit: replace all occurrences (default: first only)", "default": false}
                                     },
                                     "required": ["tool"]
                                 }
@@ -1192,6 +1195,18 @@ public static class McpServer
                         current = awkOut;
                         break;
                     }
+                    case "edit":
+                    {
+                        if (cs.EditReplaceAll)
+                            current = current.Replace(cs.EditOld!, cs.EditNew!);
+                        else
+                        {
+                            int idx = current.IndexOf(cs.EditOld!, StringComparison.Ordinal);
+                            if (idx >= 0)
+                                current = string.Concat(current.AsSpan(0, idx), cs.EditNew!, current.AsSpan(idx + cs.EditOld!.Length));
+                        }
+                        break;
+                    }
                 }
 
                 if (filtered) break;
@@ -1201,9 +1216,9 @@ public static class McpServer
 
             result.FilesMatched++;
 
-            // Determine if the last stage was a transformation (sed/awk) or a filter (grep)
+            // Determine if the last stage was a transformation (sed/awk/edit) or a filter (grep)
             bool hasTransform = compiledStages.Count > 0 &&
-                (compiledStages[^1].Tool == "sed" || compiledStages[^1].Tool == "awk");
+                (compiledStages[^1].Tool == "sed" || compiledStages[^1].Tool == "awk" || compiledStages[^1].Tool == "edit");
 
             if (hasTransform && (inPlace || dryRun))
             {
@@ -1354,6 +1369,17 @@ public static class McpServer
                 var compiled = GetOrCompileAwk(program);
                 return new CompiledStage("awk") { Awk = compiled, AwkFieldSep = fieldSep, AwkVariables = variables };
             }
+            case "edit":
+            {
+                string old = s.TryGetProperty("old", out var oEl)
+                    ? oEl.GetString() ?? ""
+                    : throw new ArgumentException("edit stage requires 'old'");
+                string @new = s.TryGetProperty("new", out var nEl)
+                    ? nEl.GetString() ?? ""
+                    : throw new ArgumentException("edit stage requires 'new'");
+                bool replaceAll = s.TryGetProperty("replaceAll", out var raEl) && raEl.GetBoolean();
+                return new CompiledStage("edit") { EditOld = old, EditNew = @new, EditReplaceAll = replaceAll };
+            }
             default:
                 throw new ArgumentException($"Unknown stage tool: {stage.Tool}");
         }
@@ -1387,6 +1413,9 @@ public static class McpServer
         public AwkScript? Awk { get; init; }
         public string? AwkFieldSep { get; init; }
         public Dictionary<string, string>? AwkVariables { get; init; }
+        public string? EditOld { get; init; }
+        public string? EditNew { get; init; }
+        public bool EditReplaceAll { get; init; }
     }
 
     private static string? HandleUnknownMethod(JsonElement? id, string? method)
