@@ -99,6 +99,7 @@ public class McpEditPipelineTests
         {
             psi = new ProcessStartInfo(s_mcpBinary)
             {
+                ArgumentList = { "server" },
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -112,7 +113,7 @@ public class McpEditPipelineTests
                 TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..", "fred-mcp"));
             psi = new ProcessStartInfo("dotnet")
             {
-                ArgumentList = { "run", "--project", projectDir, "-c", "Release", "--no-build" },
+                ArgumentList = { "run", "--project", projectDir, "-c", "Release", "--no-build", "--", "server" },
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

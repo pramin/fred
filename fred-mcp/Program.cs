@@ -27,58 +27,90 @@ public static class McpServer
 
     public static async Task<int> Main(string[] args)
     {
-        // Handle --install command
-        if (args.Length > 0 && args[0] == "--install")
-        {
-            return Install(args.Length > 1 ? args[1] : "all");
-        }
+        string? cmd = args.Length > 0 ? args[0] : null;
 
-        // Handle --version
-        if (args.Length > 0 && args[0] == "--version")
+        switch (cmd)
         {
-            Console.WriteLine($"{ServerName} {ServerVersion}");
-            return 0;
-        }
+            case "install":
+                // Update tool, configure clients, schedule future update checks
+                return Install(args.Length > 1 ? args[1] : "all", updateTool: true);
 
-        Console.Error.WriteLine($"{ServerName} v{ServerVersion} starting...");
+            case "server":
+                Console.Error.WriteLine($"{ServerName} v{ServerVersion} starting...");
+                _ = Task.Run(CheckForUpdate);
+                try
+                {
+                    await RunMainLoop();
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"{ServerName}: fatal error: {ex.Message}");
+                    return 1;
+                }
 
-        // Background auto-update check (non-blocking)
-        _ = Task.Run(CheckForUpdate);
+            case null:
+            case "help":
+            case "--help":
+            case "-h":
+            case "-?":
+            case "--?":
+            case "/?":
+            case "/h":
+            case "/help":
+                PrintHelp();
+                return 0;
 
-        try
-        {
-            await RunMainLoop();
-            return 0;
+            default:
+                Console.Error.WriteLine($"{ServerName}: unknown command: {cmd}");
+                Console.Error.WriteLine();
+                PrintHelp();
+                return 1;
         }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"{ServerName}: fatal error: {ex.Message}");
-            return 1;
-        }
+    }
+
+    private static void PrintHelp()
+    {
+        Console.WriteLine($"{ServerName} v{ServerVersion} — MCP server for find/grep/sed/awk");
+        Console.WriteLine();
+        Console.WriteLine("Usage:");
+        Console.WriteLine($"  {ServerName} install [claude|vscode|all]");
+        Console.WriteLine("      Update tool, configure MCP clients, schedule daily update checks.");
+        Console.WriteLine($"  {ServerName} server");
+        Console.WriteLine("      Run the JSON-RPC server on stdin/stdout (MCP clients invoke this).");
+        Console.WriteLine($"  {ServerName} help");
+        Console.WriteLine("      Print this help.");
+        Console.WriteLine();
+        Console.WriteLine("First-time setup:");
+        Console.WriteLine($"  dotnet tool install -g FredsMCP");
+        Console.WriteLine($"  {ServerName} install");
     }
 
     // -------------------------------------------------------------------------
     // --install: update tool + configure MCP for claude/vscode/copilot
     // -------------------------------------------------------------------------
 
-    private static int Install(string target)
+    private static int Install(string target, bool updateTool)
     {
-        Console.WriteLine($"fred-mcp install: updating to latest version...");
+        if (updateTool)
+        {
+            Console.WriteLine($"fred-mcp install: updating to latest version...");
 
-        // Update the tool (no-op if already latest)
-        var update = Process.Start(new ProcessStartInfo("dotnet", "tool update -g FredsMCP")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        });
-        if (update != null)
-        {
-            string output = update.StandardOutput.ReadToEnd();
-            string error = update.StandardError.ReadToEnd();
-            update.WaitForExit();
-            if (output.Length > 0) Console.WriteLine(output.TrimEnd());
-            if (update.ExitCode != 0 && error.Length > 0) Console.Error.WriteLine(error.TrimEnd());
+            // Update the tool (no-op if already latest)
+            var update = Process.Start(new ProcessStartInfo("dotnet", "tool update -g FredsMCP")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            });
+            if (update != null)
+            {
+                string output = update.StandardOutput.ReadToEnd();
+                string error = update.StandardError.ReadToEnd();
+                update.WaitForExit();
+                if (output.Length > 0) Console.WriteLine(output.TrimEnd());
+                if (update.ExitCode != 0 && error.Length > 0) Console.Error.WriteLine(error.TrimEnd());
+            }
         }
 
         string command = "freds-mcp";
@@ -162,6 +194,10 @@ public static class McpServer
             writer.WritePropertyName("fred");
             writer.WriteStartObject();
             writer.WriteString("command", command);
+            writer.WritePropertyName("args");
+            writer.WriteStartArray();
+            writer.WriteStringValue("server");
+            writer.WriteEndArray();
             writer.WriteEndObject();
 
             writer.WriteEndObject(); // mcpServers
@@ -229,6 +265,10 @@ public static class McpServer
             writer.WriteStartObject();
             writer.WriteString("type", "stdio");
             writer.WriteString("command", command);
+            writer.WritePropertyName("args");
+            writer.WriteStartArray();
+            writer.WriteStringValue("server");
+            writer.WriteEndArray();
             writer.WriteEndObject();
 
             writer.WriteEndObject(); // servers
