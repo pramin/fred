@@ -24,7 +24,7 @@ jobs:
       - name: Pack FredDotNet (library)
         run: dotnet pack FredDotNet/FredDotNet.csproj -c Release --no-build -p:Version=${GITHUB_REF_NAME#v}
 
-      - name: Pack FredMCP (dotnet tool)
+      - name: Pack FredsMCP (dotnet tool)
         run: dotnet pack fred-mcp/fred-mcp.csproj -c Release --no-build -p:Version=${GITHUB_REF_NAME#v}
 
       - name: Push to NuGet

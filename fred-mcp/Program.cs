@@ -66,7 +66,7 @@ public static class McpServer
         Console.WriteLine($"fred-mcp install: updating to latest version...");
 
         // Update the tool (no-op if already latest)
-        var update = Process.Start(new ProcessStartInfo("dotnet", "tool update -g FredMCP")
+        var update = Process.Start(new ProcessStartInfo("dotnet", "tool update -g FredsMCP")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -260,7 +260,7 @@ public static class McpServer
 
             Console.Error.WriteLine($"{ServerName}: checking for updates...");
 
-            var proc = Process.Start(new ProcessStartInfo("dotnet", "tool update -g FredMCP")
+            var proc = Process.Start(new ProcessStartInfo("dotnet", "tool update -g FredsMCP")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

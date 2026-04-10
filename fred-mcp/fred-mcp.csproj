@@ -10,7 +10,7 @@
     <!-- dotnet tool packaging -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>fred-mcp</ToolCommandName>
-    <PackageId>FredMCP</PackageId>
+    <PackageId>FredsMCP</PackageId>
     <Version>1.0.0</Version>
     <Authors>Paul Ramin</Authors>
     <Description>MCP server exposing find, grep, sed, and AWK tools for AI coding assistants. Install as a dotnet tool, point Claude Code or Copilot at it.</Description>
