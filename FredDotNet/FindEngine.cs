@@ -8,7 +8,9 @@ namespace FredDotNet;
 /// </summary>
 public sealed class FindException : Exception
 {
+    /// <summary>Creates a FindException with the specified error message.</summary>
     public FindException(string message) : base(message) { }
+    /// <summary>Creates a FindException with the specified error message and inner exception.</summary>
     public FindException(string message, Exception inner) : base(message, inner) { }
 }
 
@@ -17,25 +19,45 @@ public sealed class FindException : Exception
 /// </summary>
 public enum FindPredicateType
 {
-    // Glob matching
-    Name, IName, Path, IPath,
-    // Type filter
+    /// <summary>Match entry name against a case-sensitive glob pattern (-name).</summary>
+    Name,
+    /// <summary>Match entry name against a case-insensitive glob pattern (-iname).</summary>
+    IName,
+    /// <summary>Match full path against a case-sensitive glob pattern (-path).</summary>
+    Path,
+    /// <summary>Match full path against a case-insensitive glob pattern (-ipath).</summary>
+    IPath,
+    /// <summary>Filter by filesystem entry type: f (file), d (directory), l (symlink) (-type).</summary>
     Type,
-    // Size filter
+    /// <summary>Filter by file size with optional +/- comparison (-size).</summary>
     Size,
-    // Time-based
-    MTime, MMin, Newer,
-    // Empty
+    /// <summary>Filter by modification time in days (-mtime).</summary>
+    MTime,
+    /// <summary>Filter by modification time in minutes (-mmin).</summary>
+    MMin,
+    /// <summary>Match entries newer than a reference file (-newer).</summary>
+    Newer,
+    /// <summary>Match empty files or directories (-empty).</summary>
     Empty,
-    // Depth control (handled at options level, but kept for arg parsing)
-    MaxDepth, MinDepth,
-    // Logical
-    Not, And, Or,
-    // Actions
-    Print, Print0, Prune,
-    // Internal: grouping node
+    /// <summary>Limit maximum directory traversal depth (-maxdepth).</summary>
+    MaxDepth,
+    /// <summary>Require minimum directory depth before testing (-mindepth).</summary>
+    MinDepth,
+    /// <summary>Logical negation of a child predicate (!).</summary>
+    Not,
+    /// <summary>Logical AND of child predicates (-a).</summary>
+    And,
+    /// <summary>Logical OR of child predicates (-o).</summary>
+    Or,
+    /// <summary>Print matching path to output (-print).</summary>
+    Print,
+    /// <summary>Print matching path followed by null byte (-print0).</summary>
+    Print0,
+    /// <summary>Prevent descent into matched directory (-prune).</summary>
+    Prune,
+    /// <summary>Internal grouping node for parenthesized expressions.</summary>
     Group,
-    // Always-true (used as implicit default)
+    /// <summary>Always-true predicate used as the implicit default.</summary>
     True,
 }
 
@@ -45,6 +67,7 @@ public enum FindPredicateType
 /// </summary>
 public sealed class FindPredicate
 {
+    /// <summary>The predicate type that determines evaluation behavior.</summary>
     public FindPredicateType Type { get; }
 
     /// <summary>Pattern string for Name/IName/Path/IPath, type char for Type, size spec for Size, etc.</summary>
@@ -62,6 +85,7 @@ public sealed class FindPredicate
     /// <summary>Compiled regex for glob matching (Name/IName/Path/IPath).</summary>
     internal Regex? CompiledPattern { get; }
 
+    /// <summary>Creates a predicate with the specified type, optional pattern value, numeric value, and comparison sign.</summary>
     public FindPredicate(FindPredicateType type, string? value = null, long numericValue = 0, int sign = 0)
     {
         Type = type;
@@ -136,10 +160,15 @@ public sealed class FindPredicate
 /// </summary>
 public sealed class FindOptions
 {
+    /// <summary>Root directories to begin the search from.</summary>
     public List<string> StartPaths { get; } = new();
+    /// <summary>Maximum directory depth to traverse (default: unlimited).</summary>
     public int MaxDepth { get; set; } = int.MaxValue;
+    /// <summary>Minimum directory depth before evaluating predicates (default: 0).</summary>
     public int MinDepth { get; set; } = 0;
+    /// <summary>List of predicates forming the find expression tree.</summary>
     public List<FindPredicate> Predicates { get; } = new();
+    /// <summary>When true, separate output paths with null bytes instead of newlines.</summary>
     public bool Print0 { get; set; }
 }
 

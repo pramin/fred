@@ -11,6 +11,7 @@ public sealed class LruCache<TKey, TValue> where TKey : notnull
     private readonly LinkedList<(TKey Key, TValue Value)> _list;
     private readonly object _lock = new();
 
+    /// <inheritdoc />
     public LruCache(int capacity)
     {
         if (capacity <= 0)

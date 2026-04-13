@@ -1352,6 +1352,7 @@ internal sealed class GroupedExprsNode : AwkNode
 /// </summary>
 public sealed class AwkException : Exception
 {
+    /// <inheritdoc />
     public AwkException(string message) : base(message) { }
 }
 

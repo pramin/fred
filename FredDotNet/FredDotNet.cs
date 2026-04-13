@@ -97,9 +97,13 @@ public enum AddressType
 /// </summary>
 public class SedAddress
 {
+    /// <summary>The kind of address (line number, pattern, range, etc.).</summary>
     public AddressType Type { get; }
+    /// <summary>Primary value: line number string for LineNumber, regex for Pattern, start for Range/Step.</summary>
     public string? Value1 { get; }
+    /// <summary>Secondary value: end address for Range, step value for Step.</summary>
     public string? Value2 { get; }
+    /// <summary>When true, the address matches lines that do NOT satisfy the condition.</summary>
     public bool Negated { get; }
 
     // Cached derived values -- computed once at construction, read-only thereafter.
@@ -112,6 +116,7 @@ public class SedAddress
     /// <summary>Compiled Regex for Pattern addresses (avoids repeated compilation).</summary>
     internal readonly Regex? CompiledPattern;
 
+    /// <summary>Creates a new address with the given type, values, and negation flag.</summary>
     public SedAddress(AddressType type, string? value1 = null, string? value2 = null, bool negated = false)
     {
         Type = type;
@@ -133,11 +138,17 @@ public class SedAddress
             CompiledPattern = new Regex(value1, RegexOptions.Compiled);
     }
 
+    /// <summary>Creates an address that matches all lines (no address restriction).</summary>
     public static SedAddress All() => new(AddressType.None);
+    /// <summary>Creates an address matching a specific line number.</summary>
     public static SedAddress LineNumber(int lineNumber) => new(AddressType.LineNumber, lineNumber.ToString());
+    /// <summary>Creates an address matching lines that contain the given regex pattern.</summary>
     public static SedAddress Pattern(string pattern) => new(AddressType.Pattern, pattern);
+    /// <summary>Creates a range address matching lines between start and end (inclusive).</summary>
     public static SedAddress Range(string start, string end) => new(AddressType.Range, start, end);
+    /// <summary>Creates a step address matching every Nth line starting from start (first~step).</summary>
     public static SedAddress Step(int start, int step) => new(AddressType.Step, start.ToString(), step.ToString());
+    /// <summary>Creates an address matching only the last line of input ($).</summary>
     public static SedAddress LastLine() => new(AddressType.LastLine);
 
     /// <summary>
@@ -151,6 +162,7 @@ public class SedAddress
 /// </summary>
 public sealed class SedException : Exception
 {
+    /// <inheritdoc />
     public SedException(string message) : base(message) { }
 }
 
@@ -159,6 +171,7 @@ public sealed class SedException : Exception
 /// </summary>
 public sealed class GrepException : Exception
 {
+    /// <inheritdoc />
     public GrepException(string message) : base(message) { }
 }
 
@@ -167,12 +180,19 @@ public sealed class GrepException : Exception
 /// </summary>
 public class SedCommand
 {
+    /// <summary>The address that determines which lines this command applies to.</summary>
     public SedAddress Address { get; }
+    /// <summary>The type of sed command (substitute, delete, print, etc.).</summary>
     public CommandType Type { get; }
+    /// <summary>Regex pattern for substitute commands, or source chars for transliterate.</summary>
     public string? Pattern { get; }
+    /// <summary>Replacement string for substitute commands, or dest chars for transliterate.</summary>
     public string? Replacement { get; }
+    /// <summary>Flags for substitute commands (g, p, I, etc.).</summary>
     public string? Flags { get; }
+    /// <summary>Label name for branch/test/label commands.</summary>
     public string? Label { get; }
+    /// <summary>Text content for append/insert/change commands.</summary>
     public string? Text { get; }
 
     /// <summary>
@@ -194,6 +214,7 @@ public class SedCommand
     /// </summary>
     public virtual IReadOnlyList<SedCommand>? Block => null;
 
+    /// <summary>Creates a new sed command with the given address, type, and optional parameters.</summary>
     public SedCommand(SedAddress address, CommandType type, string? pattern = null,
         string? replacement = null, string? flags = null, string? label = null,
         string? text = null, string? filename = null)
@@ -228,9 +249,13 @@ public class SedCommand
     public static SedCommand Insert(SedAddress address, string text) => new(address, CommandType.Insert, text: text);
     /// <summary>Creates a change (c) command that replaces matched lines with text and starts the next cycle.</summary>
     public static SedCommand Change(SedAddress address, string text) => new(address, CommandType.Change, text: text);
+    /// <summary>Creates a branch (b) command that jumps to the named label.</summary>
     public static SedCommand Branch(SedAddress address, string? label = null) => new(address, CommandType.Branch, label: label);
+    /// <summary>Creates a test (t) command that branches if the last substitution succeeded.</summary>
     public static SedCommand Test(SedAddress address, string? label = null) => new(address, CommandType.Test, label: label);
+    /// <summary>Creates a test-not (T) command that branches if the last substitution did NOT succeed.</summary>
     public static SedCommand TestNot(SedAddress address, string? label = null) => new(address, CommandType.TestNot, label: label);
+    /// <summary>Creates a label (:) definition used as a branch/test target.</summary>
     public static SedCommand DefineLabel(string label) => new(SedAddress.All(), CommandType.Label, label: label);
 
     /// <summary>
@@ -431,7 +456,18 @@ internal sealed class BlockCommandImpl : SedCommand
 /// </summary>
 public enum ExecutionAction
 {
-    Continue, NextCycle, RestartCycle, Branch, Quit, QuitNoprint
+    /// <summary>Continue to the next command in the script.</summary>
+    Continue,
+    /// <summary>Start the next cycle (read next line, restart from first command).</summary>
+    NextCycle,
+    /// <summary>Restart the current cycle without reading new input (used by D command).</summary>
+    RestartCycle,
+    /// <summary>Branch to a named label within the script.</summary>
+    Branch,
+    /// <summary>Quit processing, printing the current pattern space.</summary>
+    Quit,
+    /// <summary>Quit processing without printing the pattern space.</summary>
+    QuitNoprint
 }
 
 /// <summary>
@@ -1120,9 +1156,12 @@ public class SedScript
     /// </summary>
     private readonly Dictionary<(string, bool), Regex> _addressPatternCache = new();
 
+    /// <summary>The ordered list of compiled sed commands in this script.</summary>
     public ReadOnlyCollection<SedCommand> Commands { get; }
+    /// <summary>When true, pattern space is not printed automatically at end of cycle (sed -n mode).</summary>
     public bool SuppressDefaultOutput => _suppressDefaultOutput;
 
+    /// <summary>Creates a new SedScript from the given commands with optional sed -n and ERE modes.</summary>
     public SedScript(IEnumerable<SedCommand> commands, bool suppressDefaultOutput = false, bool useEre = false)
     {
         _commands = new List<SedCommand>(commands);
@@ -3474,26 +3513,47 @@ public class FluentSed
 /// </summary>
 public sealed class GrepOptions
 {
+    /// <summary>Use Extended Regular Expressions (ERE) instead of Basic (BRE). Equivalent to grep -E.</summary>
     public bool UseERE { get; set; }
+    /// <summary>Treat patterns as fixed strings, not regexes. Equivalent to grep -F.</summary>
     public bool FixedStrings { get; set; }
+    /// <summary>Case-insensitive matching. Equivalent to grep -i.</summary>
     public bool IgnoreCase { get; set; }
+    /// <summary>Select non-matching lines. Equivalent to grep -v.</summary>
     public bool InvertMatch { get; set; }
+    /// <summary>Prefix each output line with its line number. Equivalent to grep -n.</summary>
     public bool LineNumbers { get; set; }
+    /// <summary>Print only a count of matching lines. Equivalent to grep -c.</summary>
     public bool Count { get; set; }
+    /// <summary>Print only names of files containing matches. Equivalent to grep -l.</summary>
     public bool FilesWithMatches { get; set; }
+    /// <summary>Print only names of files with no matches. Equivalent to grep -L.</summary>
     public bool FilesWithoutMatches { get; set; }
+    /// <summary>Print only the matched parts of lines. Equivalent to grep -o.</summary>
     public bool OnlyMatching { get; set; }
+    /// <summary>Match whole words only. Equivalent to grep -w.</summary>
     public bool WholeWord { get; set; }
+    /// <summary>Match whole lines only. Equivalent to grep -x.</summary>
     public bool WholeLine { get; set; }
+    /// <summary>Quiet mode: exit with status 0 on first match, no output. Equivalent to grep -q.</summary>
     public bool Quiet { get; set; }
+    /// <summary>Suppress error messages about nonexistent or unreadable files. Equivalent to grep -s.</summary>
     public bool SuppressErrors { get; set; }
+    /// <summary>Always print the filename with output lines. Equivalent to grep -H.</summary>
     public bool ForceFilename { get; set; }
+    /// <summary>Suppress the filename prefix on output. Equivalent to grep -h.</summary>
     public bool SuppressFilename { get; set; }
+    /// <summary>Stop reading a file after this many matches. 0 means unlimited. Equivalent to grep -m.</summary>
     public int MaxCount { get; set; }
+    /// <summary>Print N lines of context after each match. Equivalent to grep -A.</summary>
     public int AfterContext { get; set; }
+    /// <summary>Print N lines of context before each match. Equivalent to grep -B.</summary>
     public int BeforeContext { get; set; }
+    /// <summary>Print N lines of context before and after each match. Equivalent to grep -C.</summary>
     public int BothContext { get; set; }
+    /// <summary>List of patterns to match (multiple patterns are OR'd together). Equivalent to grep -e.</summary>
     public List<string> Patterns { get; } = new();
+    /// <summary>List of files to read patterns from, one per line. Equivalent to grep -f.</summary>
     public List<string> PatternFiles { get; } = new();
 }
 
