@@ -24,7 +24,7 @@ public static class McpServer
     private static readonly LruCache<string, List<string>> s_findCache = new(16);
 
     private static readonly string s_stateDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".fred-mcp");
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".freds-mcp");
 
     public static async Task<int> Main(string[] args)
     {
@@ -75,8 +75,8 @@ public static class McpServer
         Console.WriteLine($"{ServerName} v{ServerVersion} — MCP server for find/grep/sed/awk");
         Console.WriteLine();
         Console.WriteLine("Usage:");
-        Console.WriteLine($"  {ServerName} install [claude|vscode|all]");
-        Console.WriteLine("      Update tool, configure MCP clients, schedule daily update checks.");
+        Console.WriteLine($"  {ServerName} install [claude|vscode|copilot|all]");
+        Console.WriteLine("      Update tool, configure MCP clients (Claude Code, VS Code, Copilot CLI).");
         Console.WriteLine($"  {ServerName} server");
         Console.WriteLine("      Run the JSON-RPC server on stdin/stdout (MCP clients invoke this).");
         Console.WriteLine($"  {ServerName} help");
@@ -95,7 +95,7 @@ public static class McpServer
     {
         if (updateTool)
         {
-            Console.WriteLine($"fred-mcp install: updating to latest version...");
+            Console.WriteLine($"freds-mcp install: updating to latest version...");
 
             // Update the tool (no-op if already latest)
             var update = Process.Start(new ProcessStartInfo("dotnet", "tool update -g FredsMCP")
@@ -129,11 +129,16 @@ public static class McpServer
             any = true;
             InstallVSCode(command);
         }
+        if (all || target == "copilot")
+        {
+            any = true;
+            InstallCopilot(command);
+        }
 
         if (!any)
         {
             Console.Error.WriteLine($"Unknown target: {target}");
-            Console.Error.WriteLine("Usage: fred-mcp --install [claude|vscode|all]");
+            Console.Error.WriteLine("Usage: freds-mcp install [claude|vscode|copilot|all]");
             return 1;
         }
 
@@ -278,6 +283,80 @@ public static class McpServer
 
         File.WriteAllText(workspacePath, Encoding.UTF8.GetString(ms.ToArray()));
         Console.WriteLine($"  VS Code: configured in {workspacePath}");
+    }
+
+    private static void InstallCopilot(string command)
+    {
+        // Copilot CLI: ~/.copilot/mcp-config.json with "mcpServers" key
+        string copilotDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot");
+        string configPath = Path.Combine(copilotDir, "mcp-config.json");
+
+        JsonElement root = default;
+
+        if (File.Exists(configPath))
+        {
+            try
+            {
+                string existing = File.ReadAllText(configPath);
+                using var doc = JsonDocument.Parse(existing);
+                root = doc.RootElement.Clone();
+            }
+            catch { }
+        }
+        else
+        {
+            Directory.CreateDirectory(copilotDir);
+        }
+
+        using var ms = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
+        {
+            writer.WriteStartObject();
+
+            // Copy existing properties
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in root.EnumerateObject())
+                {
+                    if (prop.Name == "mcpServers") continue;
+                    prop.WriteTo(writer);
+                }
+            }
+
+            // Write mcpServers, merging with existing
+            writer.WritePropertyName("mcpServers");
+            writer.WriteStartObject();
+
+            // Copy existing servers
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("mcpServers", out var existingServers) &&
+                existingServers.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in existingServers.EnumerateObject())
+                {
+                    if (prop.Name == "fred") continue;
+                    prop.WriteTo(writer);
+                }
+            }
+
+            // Add/update fred
+            writer.WritePropertyName("fred");
+            writer.WriteStartObject();
+            writer.WriteString("type", "stdio");
+            writer.WriteString("command", command);
+            writer.WritePropertyName("args");
+            writer.WriteStartArray();
+            writer.WriteStringValue("server");
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+
+            writer.WriteEndObject(); // mcpServers
+            writer.WriteEndObject(); // root
+        }
+
+        File.WriteAllText(configPath, Encoding.UTF8.GetString(ms.ToArray()));
+        Console.WriteLine($"  Copilot CLI: configured in {configPath}");
     }
 
     // -------------------------------------------------------------------------
@@ -557,6 +636,80 @@ public static class McpServer
                     }
                 },
                 {
+                    "name": "wc",
+                    "description": "Count lines, words, characters, and bytes. Use this to quickly check file size before deciding whether to read the whole thing, or to count occurrences after grep.\n\nExamples:\n- Count lines in a file: {file: \"src/App.cs\"}\n- Count words in text: {input: \"hello world\"}",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "file": {"type": "string", "description": "File to count"},
+                            "input": {"type": "string", "description": "Text to count (if no file)"}
+                        }
+                    }
+                },
+                {
+                    "name": "base64",
+                    "description": "Encode or decode Base64. Use this for API payloads, embedded images, JWT tokens, or any binary-to-text conversion.\n\nExamples:\n- Encode: {input: \"hello\", action: \"encode\"}\n- Decode: {input: \"aGVsbG8=\", action: \"decode\"}\n- URL-safe: {input: \"data\", action: \"encode\", urlSafe: true}",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "input": {"type": "string", "description": "String to encode, or Base64 string to decode"},
+                            "file": {"type": "string", "description": "File to encode (reads as bytes)"},
+                            "action": {"type": "string", "enum": ["encode", "decode"], "description": "encode or decode"},
+                            "urlSafe": {"type": "boolean", "description": "Use URL-safe Base64 (no padding, -_ instead of +/)"}
+                        },
+                        "required": ["action"]
+                    }
+                },
+                {
+                    "name": "sort",
+                    "description": "Sort and deduplicate lines of text. Use this to organize output from other tools, rank results, or remove duplicates.\n\nExamples:\n- Sort file: {file: \"list.txt\"}\n- Unique sorted: {file: \"data.txt\", unique: true}\n- Numeric sort: {input: \"3\\n1\\n2\", numeric: true}\n- Sort by 2nd field: {file: \"data.tsv\", keyField: 2, fieldSeparator: \"\\t\"}",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "file": {"type": "string", "description": "File to sort"},
+                            "input": {"type": "string", "description": "Text to sort (if no file)"},
+                            "reverse": {"type": "boolean", "description": "Reverse sort order"},
+                            "numeric": {"type": "boolean", "description": "Sort numerically instead of alphabetically"},
+                            "ignoreCase": {"type": "boolean", "description": "Case-insensitive sorting"},
+                            "unique": {"type": "boolean", "description": "Remove duplicate lines"},
+                            "keyField": {"type": "integer", "description": "Sort by this field number (1-based)"},
+                            "fieldSeparator": {"type": "string", "description": "Field separator for keyField sorting"}
+                        }
+                    }
+                },
+                {
+                    "name": "uniq",
+                    "description": "Filter adjacent duplicate lines. Unlike sort -u which deduplicates globally, uniq only collapses CONSECUTIVE identical lines — pipe through sort first for global dedup. Use for frequency analysis with -c, finding repeated lines with -d.\n\nExamples:\n- Remove adjacent dupes: {file: \"output.txt\"}\n- Count occurrences: {input: \"a\\na\\nb\\na\", count: true}\n- Show only repeated lines: {file: \"log.txt\", onlyDuplicates: true}",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "file": {"type": "string", "description": "File to process"},
+                            "input": {"type": "string", "description": "Text to process (if no file)"},
+                            "count": {"type": "boolean", "description": "Prefix each line with number of occurrences"},
+                            "onlyDuplicates": {"type": "boolean", "description": "Only output lines that are repeated"},
+                            "onlyUnique": {"type": "boolean", "description": "Only output lines that are NOT repeated"},
+                            "ignoreCase": {"type": "boolean", "description": "Case-insensitive comparison"}
+                        }
+                    }
+                },
+                {
+                    "name": "diff",
+                    "description": "Generate or apply unified diffs. Use this to compare files, preview changes before applying, or apply patches. Works like Unix diff/patch.\n\nExamples:\n- Compare two files: {originalFile: \"old.cs\", modifiedFile: \"new.cs\"}\n- Compare strings: {original: \"hello\\nworld\", modified: \"hello\\nearth\"}\n- Apply a patch: {file: \"src/App.cs\", patch: \"--- a/...\\n+++ b/...\\n@@ ...\"}\n- Dry-run patch: {file: \"src/App.cs\", patch: \"...\", dryRun: true}",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "original": {"type": "string", "description": "Original text (for generating diff)"},
+                            "modified": {"type": "string", "description": "Modified text (for generating diff)"},
+                            "originalFile": {"type": "string", "description": "Path to original file"},
+                            "modifiedFile": {"type": "string", "description": "Path to modified file"},
+                            "patch": {"type": "string", "description": "Unified diff to apply"},
+                            "file": {"type": "string", "description": "File to patch"},
+                            "backup": {"type": "string", "description": "Backup suffix before patching (e.g. .bak)"},
+                            "dryRun": {"type": "boolean", "description": "Check if patch applies cleanly without modifying"}
+                        }
+                    }
+                },
+                {
                     "name": "pipeline",
                     "description": "Chain multiple tools into a single operation: find files, then grep/sed/awk/jq/edit them in sequence. The output of each stage feeds into the next. Start with 'find' to select files, then transform their contents. Supports in-place editing and dry-run preview.\n\nExamples:\n- Find and replace across codebase: {stages: [{tool:\"find\", path:\"src\", name:\"*.cs\", type:\"f\"}, {tool:\"sed\", script:\"s/oldAPI/newAPI/g\"}], inPlace: true}\n- Find JSON configs and extract a field: {stages: [{tool:\"find\", path:\".\", name:\"*.json\", type:\"f\"}, {tool:\"jq\", expression:\".version\"}]}\n- Search and transform: {stages: [{tool:\"find\", path:\".\", name:\"*.ts\"}, {tool:\"grep\", pattern:\"deprecated\"}, {tool:\"awk\", program:\"{print FILENAME \\\":\\\" NR}\"}]}\n- Literal string replace: {stages: [{tool:\"find\", path:\".\", name:\"*.md\"}, {tool:\"edit\", old:\"v1.0\", new:\"v2.0\", replaceAll:true}], inPlace: true}",
                     "inputSchema": {
@@ -568,7 +721,7 @@ public static class McpServer
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "tool": {"type": "string", "enum": ["find", "grep", "sed", "awk", "jq", "edit"], "description": "Tool for this stage"},
+                                        "tool": {"type": "string", "enum": ["find", "grep", "sed", "awk", "jq", "edit", "wc", "base64", "sort", "uniq", "diff"], "description": "Tool for this stage"},
                                         "path": {"type": "string", "description": "find: starting directory"},
                                         "name": {"type": "string", "description": "find: filename glob pattern"},
                                         "iname": {"type": "string", "description": "find: case-insensitive glob"},
@@ -594,7 +747,15 @@ public static class McpServer
                                         "sortKeys": {"type": "boolean", "description": "jq: sort object keys"},
                                         "old": {"type": "string", "description": "edit: exact string to find (no regex)"},
                                         "new": {"type": "string", "description": "edit: replacement string"},
-                                        "replaceAll": {"type": "boolean", "description": "edit: replace all occurrences (default: first only)"}
+                                        "replaceAll": {"type": "boolean", "description": "edit: replace all occurrences (default: first only)"},
+                                        "reverse": {"type": "boolean", "description": "sort: reverse order"},
+                                        "numeric": {"type": "boolean", "description": "sort: numeric comparison"},
+                                        "unique": {"type": "boolean", "description": "sort/uniq: remove duplicates"},
+                                        "onlyDuplicates": {"type": "boolean", "description": "uniq: output only repeated lines"},
+                                        "onlyUnique": {"type": "boolean", "description": "uniq: output only non-repeated lines"},
+                                        "count": {"type": "boolean", "description": "uniq: prefix lines with occurrence count"},
+                                        "action": {"type": "string", "description": "base64: encode or decode"},
+                                        "urlSafe": {"type": "boolean", "description": "base64: URL-safe encoding"}
                                     },
                                     "required": ["tool"]
                                 }
@@ -641,6 +802,11 @@ public static class McpServer
                 "awk" => ExecuteAwk(arguments),
                 "jq" => ExecuteJq(arguments),
                 "curl" => ExecuteCurl(arguments),
+                "wc" => ExecuteWc(arguments),
+                "base64" => ExecuteBase64(arguments),
+                "sort" => ExecuteSort(arguments),
+                "uniq" => ExecuteUniq(arguments),
+                "diff" => ExecuteDiff(arguments),
                 "pipeline" => ExecutePipeline(arguments),
                 _ => throw new InvalidOperationException($"Unknown tool: {toolName}"),
             };
@@ -1288,6 +1454,118 @@ public static class McpServer
         return result;
     }
 
+
+    /// <summary>
+    /// Executes the diff tool: generate unified diffs or apply patches.
+    /// </summary>
+    private static string ExecuteDiff(JsonElement? args)
+    {
+        string? original = null;
+        string? modified = null;
+        string? originalFile = null;
+        string? modifiedFile = null;
+        string? patch = null;
+        string? file = null;
+        string? backup = null;
+        bool dryRun = false;
+
+        if (args != null)
+        {
+            var a = args.Value;
+            if (a.TryGetProperty("original", out var origEl)) original = origEl.GetString();
+            if (a.TryGetProperty("modified", out var modEl)) modified = modEl.GetString();
+            if (a.TryGetProperty("originalFile", out var origFileEl)) originalFile = origFileEl.GetString();
+            if (a.TryGetProperty("modifiedFile", out var modFileEl)) modifiedFile = modFileEl.GetString();
+            if (a.TryGetProperty("patch", out var patchEl)) patch = patchEl.GetString();
+            if (a.TryGetProperty("file", out var fileEl)) file = fileEl.GetString();
+            if (a.TryGetProperty("backup", out var backupEl)) backup = backupEl.GetString();
+            if (a.TryGetProperty("dryRun", out var dryRunEl)) dryRun = dryRunEl.GetBoolean();
+        }
+
+        // Mode 1: Diff two files
+        if (originalFile != null && modifiedFile != null)
+        {
+            return DiffEngine.DiffFiles(originalFile, modifiedFile);
+        }
+
+        // Mode 2: Diff two strings
+        if (original != null && modified != null)
+        {
+            return DiffEngine.Diff(original, modified);
+        }
+
+        // Mode 3: Apply patch to file
+        if (patch != null && file != null)
+        {
+            if (dryRun)
+            {
+                string fileContent = File.ReadAllText(file);
+                bool canApply = DiffEngine.CanPatch(fileContent, patch);
+                if (canApply)
+                {
+                    string result = DiffEngine.Patch(fileContent, patch);
+                    string preview = UnifiedDiff.Generate(fileContent, result, file, file);
+                    return string.IsNullOrEmpty(preview)
+                        ? "Patch applies cleanly (no changes)."
+                        : $"Patch applies cleanly. Preview:\n{preview}";
+                }
+                else
+                {
+                    return "Patch cannot be applied cleanly.";
+                }
+            }
+
+            DiffEngine.PatchFile(file, patch, backup);
+            return backup != null
+                ? $"Patched {file} (backup: {file}{backup})"
+                : $"Patched {file}";
+        }
+
+        // Mode 4: Apply patch to string
+        if (patch != null && original != null)
+        {
+            return DiffEngine.Patch(original, patch);
+        }
+
+        throw new ArgumentException(
+            "Invalid arguments for diff. Provide either: " +
+            "(originalFile + modifiedFile) to diff files, " +
+            "(original + modified) to diff strings, or " +
+            "(patch + file) to apply a patch.");
+    }
+
+    private static string ExecuteUniq(JsonElement? args)
+    {
+        if (args == null)
+            throw new ArgumentException("Missing arguments for uniq");
+
+        var a = args.Value;
+
+        string input;
+        if (a.TryGetProperty("file", out var fileEl))
+        {
+            string? path = fileEl.GetString();
+            if (path == null) throw new ArgumentException("file must be a string");
+            input = File.ReadAllText(path);
+        }
+        else if (a.TryGetProperty("input", out var inputEl))
+        {
+            input = inputEl.GetString() ?? "";
+        }
+        else
+        {
+            throw new ArgumentException("Missing file or input");
+        }
+
+        var options = new UniqOptions();
+        if (a.TryGetProperty("count", out var cEl) && cEl.GetBoolean()) options.Count = true;
+        if (a.TryGetProperty("onlyDuplicates", out var dEl) && dEl.GetBoolean()) options.OnlyDuplicates = true;
+        if (a.TryGetProperty("onlyUnique", out var uEl) && uEl.GetBoolean()) options.OnlyUnique = true;
+        if (a.TryGetProperty("ignoreCase", out var iEl) && iEl.GetBoolean()) options.IgnoreCase = true;
+
+        return UniqEngine.Execute(input, options);
+    }
+
     private static string ExecutePipeline(JsonElement? args)
     {
         if (args == null)
@@ -1449,6 +1727,35 @@ public static class McpServer
                         }
                         break;
                     }
+                    case "wc":
+                    {
+                        var wcResult = WcEngine.Count(current);
+                        current = $"  {wcResult.Lines}  {wcResult.Words}  {wcResult.Bytes}\n";
+                        break;
+                    }
+                    case "base64":
+                    {
+                        if (cs.Base64Decode)
+                            current = cs.Base64UrlSafe ? Base64Engine.DecodeUrl(current.TrimEnd('\n', '\r')) : Base64Engine.Decode(current.TrimEnd('\n', '\r'));
+                        else
+                            current = cs.Base64UrlSafe ? Base64Engine.EncodeUrl(current) : Base64Engine.Encode(current);
+                        break;
+                    }
+                    case "sort":
+                    {
+                        current = SortEngine.Sort(current, cs.SortOptions);
+                        break;
+                    }
+                    case "uniq":
+                    {
+                        current = UniqEngine.Execute(current, cs.UniqOptions);
+                        break;
+                    }
+                    case "diff":
+                    {
+                        // diff in pipeline context: no-op (needs two inputs, not applicable as a transform stage)
+                        break;
+                    }
                 }
 
                 if (filtered) break;
@@ -1461,7 +1768,10 @@ public static class McpServer
             // Determine if the last stage was a transformation (sed/awk/jq/edit) or a filter (grep)
             bool hasTransform = compiledStages.Count > 0 &&
                 (compiledStages[^1].Tool == "sed" || compiledStages[^1].Tool == "awk" ||
-                 compiledStages[^1].Tool == "jq" || compiledStages[^1].Tool == "edit");
+                 compiledStages[^1].Tool == "jq" || compiledStages[^1].Tool == "edit" ||
+                 compiledStages[^1].Tool == "wc" || compiledStages[^1].Tool == "base64" ||
+                 compiledStages[^1].Tool == "sort" || compiledStages[^1].Tool == "uniq" ||
+                 compiledStages[^1].Tool == "diff");
 
             if (hasTransform && (inPlace || dryRun))
             {
@@ -1635,6 +1945,38 @@ public static class McpServer
                 bool replaceAll = s.TryGetProperty("replaceAll", out var raEl) && raEl.GetBoolean();
                 return new CompiledStage("edit") { EditOld = old, EditNew = @new, EditReplaceAll = replaceAll };
             }
+            case "wc":
+                return new CompiledStage("wc");
+            case "base64":
+            {
+                bool decode = s.TryGetProperty("action", out var actEl) && actEl.GetString() == "decode";
+                bool urlSafe = s.TryGetProperty("urlSafe", out var usEl) && usEl.GetBoolean();
+                return new CompiledStage("base64") { Base64Decode = decode, Base64UrlSafe = urlSafe };
+            }
+            case "sort":
+            {
+                var sortOpts = new SortOptions();
+                if (s.TryGetProperty("reverse", out var rEl) && rEl.GetBoolean()) sortOpts.Reverse = true;
+                if (s.TryGetProperty("numeric", out var nEl2) && nEl2.GetBoolean()) sortOpts.Numeric = true;
+                if (s.TryGetProperty("ignoreCase", out var icEl) && icEl.GetBoolean()) sortOpts.IgnoreCase = true;
+                if (s.TryGetProperty("unique", out var uEl) && uEl.GetBoolean()) sortOpts.Unique = true;
+                if (s.TryGetProperty("keyField", out var kfEl)) sortOpts.KeyField = kfEl.GetInt32();
+                if (s.TryGetProperty("fieldSeparator", out var fsEl2)) sortOpts.FieldSeparator = fsEl2.GetString();
+                return new CompiledStage("sort") { SortOptions = sortOpts };
+            }
+            case "uniq":
+            {
+                var uniqOpts = new UniqOptions();
+                if (s.TryGetProperty("count", out var cEl) && cEl.GetBoolean()) uniqOpts.Count = true;
+                if (s.TryGetProperty("onlyDuplicates", out var dEl) && dEl.GetBoolean()) uniqOpts.OnlyDuplicates = true;
+                if (s.TryGetProperty("onlyUnique", out var uuEl) && uuEl.GetBoolean()) uniqOpts.OnlyUnique = true;
+                if (s.TryGetProperty("ignoreCase", out var iiEl) && iiEl.GetBoolean()) uniqOpts.IgnoreCase = true;
+                return new CompiledStage("uniq") { UniqOptions = uniqOpts };
+            }
+            case "diff":
+            {
+                return new CompiledStage("diff");
+            }
             default:
                 throw new ArgumentException($"Unknown stage tool: {stage.Tool}");
         }
@@ -1660,6 +2002,122 @@ public static class McpServer
 
     private sealed record PipelineStage(string Tool, JsonElement Element);
 
+
+    /// <summary>
+    /// Executes the wc (word count) tool. Reads from file or input text.
+    /// </summary>
+    private static string ExecuteWc(JsonElement? args)
+    {
+        string input;
+
+        if (args != null && args.Value.TryGetProperty("file", out var fileEl))
+        {
+            string? filePath = fileEl.GetString();
+            if (filePath == null || !File.Exists(filePath))
+                throw new ArgumentException($"File not found: {filePath}");
+            input = File.ReadAllText(filePath);
+        }
+        else if (args != null && args.Value.TryGetProperty("input", out var inputEl))
+        {
+            input = inputEl.GetString() ?? "";
+        }
+        else
+        {
+            input = "";
+        }
+
+        var result = WcEngine.Count(input);
+        return $"  {result.Lines}  {result.Words}  {result.Bytes}\n";
+    }
+
+    /// <summary>
+    /// Executes the base64 encode/decode tool.
+    /// </summary>
+    private static string ExecuteBase64(JsonElement? args)
+    {
+        if (args == null)
+            throw new ArgumentException("Missing arguments for base64");
+
+        var a = args.Value;
+
+        string action = a.TryGetProperty("action", out var actEl)
+            ? actEl.GetString() ?? "encode"
+            : throw new ArgumentException("Missing 'action' (encode or decode)");
+
+        bool urlSafe = a.TryGetProperty("urlSafe", out var usEl) && usEl.GetBoolean();
+
+        if (action == "encode")
+        {
+            // Check for file first (read as bytes)
+            if (a.TryGetProperty("file", out var fileEl))
+            {
+                string? filePath = fileEl.GetString();
+                if (filePath == null || !File.Exists(filePath))
+                    throw new ArgumentException($"File not found: {filePath}");
+                byte[] fileBytes = File.ReadAllBytes(filePath);
+                return urlSafe
+                    ? Base64Engine.EncodeUrl(System.Text.Encoding.UTF8.GetString(fileBytes))
+                    : Base64Engine.Encode(fileBytes);
+            }
+
+            string input = a.TryGetProperty("input", out var inputEl)
+                ? inputEl.GetString() ?? ""
+                : "";
+
+            return urlSafe ? Base64Engine.EncodeUrl(input) : Base64Engine.Encode(input);
+        }
+        else if (action == "decode")
+        {
+            string input = a.TryGetProperty("input", out var inputEl)
+                ? inputEl.GetString() ?? ""
+                : throw new ArgumentException("Missing 'input' for decode");
+
+            return urlSafe ? Base64Engine.DecodeUrl(input) : Base64Engine.Decode(input);
+        }
+        else
+        {
+            throw new ArgumentException($"Unknown action: {action}. Use 'encode' or 'decode'.");
+        }
+    }
+
+    /// <summary>
+    /// Executes the sort tool. Reads from file or input text, sorts lines.
+    /// </summary>
+    private static string ExecuteSort(JsonElement? args)
+    {
+        string input;
+
+        if (args != null && args.Value.TryGetProperty("file", out var fileEl))
+        {
+            string? filePath = fileEl.GetString();
+            if (filePath == null || !File.Exists(filePath))
+                throw new ArgumentException($"File not found: {filePath}");
+            input = File.ReadAllText(filePath);
+        }
+        else if (args != null && args.Value.TryGetProperty("input", out var inputEl))
+        {
+            input = inputEl.GetString() ?? "";
+        }
+        else
+        {
+            input = "";
+        }
+
+        var options = new SortOptions();
+        if (args != null)
+        {
+            var a = args.Value;
+            if (a.TryGetProperty("reverse", out var rEl) && rEl.GetBoolean()) options.Reverse = true;
+            if (a.TryGetProperty("numeric", out var nEl) && nEl.GetBoolean()) options.Numeric = true;
+            if (a.TryGetProperty("ignoreCase", out var icEl) && icEl.GetBoolean()) options.IgnoreCase = true;
+            if (a.TryGetProperty("unique", out var uEl) && uEl.GetBoolean()) options.Unique = true;
+            if (a.TryGetProperty("keyField", out var kfEl)) options.KeyField = kfEl.GetInt32();
+            if (a.TryGetProperty("fieldSeparator", out var fsEl)) options.FieldSeparator = fsEl.GetString();
+        }
+
+        return SortEngine.Sort(input, options);
+    }
+
     private sealed class CompiledStage(string tool)
     {
         public string Tool { get; } = tool;
@@ -1673,6 +2131,10 @@ public static class McpServer
         public string? EditOld { get; init; }
         public string? EditNew { get; init; }
         public bool EditReplaceAll { get; init; }
+        public bool Base64Decode { get; init; }
+        public bool Base64UrlSafe { get; init; }
+        public SortOptions? SortOptions { get; init; }
+        public UniqOptions? UniqOptions { get; init; }
     }
 
     private static string? HandleUnknownMethod(JsonElement? id, string? method)
