@@ -20,6 +20,7 @@ public static class McpServer
     private static readonly LruCache<string, SedScript> s_sedCache = new(64);
     private static readonly LruCache<string, GrepScript> s_grepCache = new(64);
     private static readonly LruCache<string, AwkScript> s_awkCache = new(64);
+    private static readonly LruCache<string, JqScript> s_jqCache = new(64);
     private static readonly LruCache<string, List<string>> s_findCache = new(16);
 
     private static readonly string s_stateDir = Path.Combine(
@@ -420,106 +421,161 @@ public static class McpServer
             "tools": [
                 {
                     "name": "find",
-                    "description": "Find files in a directory tree matching name patterns, type, size, and other criteria",
+                    "description": "Locate files and directories by name, type, size, or modification time. Use this FIRST when you need to discover which files exist before reading, searching, or editing them. Faster than listing directories manually. Results are cached — repeat calls with the same args are free.\n\nExamples:\n- Find all C# files: {path: \".\", name: \"*.cs\", type: \"f\"}\n- Find large log files: {path: \"/var/log\", name: \"*.log\", size: \"+10M\"}\n- Find recently changed files: {path: \"src\", type: \"f\", mmin: \"-30\"}",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "path": {"type": "string", "description": "Starting directory path", "default": "."},
-                            "name": {"type": "string", "description": "Filename glob pattern (e.g., '*.cs')"},
+                            "path": {"type": "string", "description": "Starting directory path"},
+                            "name": {"type": "string", "description": "Filename glob pattern (e.g., '*.cs', '*.json')"},
                             "iname": {"type": "string", "description": "Case-insensitive filename glob pattern"},
-                            "path_pattern": {"type": "string", "description": "Full path glob pattern (-path)"},
-                            "type": {"type": "string", "enum": ["f", "d", "l"], "description": "File type: f=file, d=directory, l=symlink"},
-                            "size": {"type": "string", "description": "Size filter, e.g. '+100k', '-1M', '0c' (suffixes: c=bytes, k=KiB, M=MiB, G=GiB)"},
-                            "maxdepth": {"type": "integer", "description": "Maximum directory depth"},
-                            "mindepth": {"type": "integer", "description": "Minimum directory depth"},
-                            "mtime": {"type": "string", "description": "Modification time in days, e.g. '+7', '-1', '0'"},
-                            "mmin": {"type": "string", "description": "Modification time in minutes, e.g. '+60', '-5'"},
-                            "newer": {"type": "string", "description": "File path; match files newer than this file"},
-                            "empty": {"type": "boolean", "description": "Match empty files/directories"},
-                            "prune": {"type": "array", "items": {"type": "string"}, "description": "Directory names to skip (e.g. ['node_modules', '.git'])"},
-                            "print0": {"type": "boolean", "description": "Null-terminated output"}
+                            "path_pattern": {"type": "string", "description": "Full path glob pattern (e.g., '*/controllers/*.cs')"},
+                            "type": {"type": "string", "enum": ["f", "d", "l"], "description": "f=file, d=directory, l=symlink"},
+                            "size": {"type": "string", "description": "Size filter: '+100k' (>100KB), '-1M' (<1MB), '0c' (empty). Suffixes: c=bytes, k=KiB, M=MiB, G=GiB"},
+                            "maxdepth": {"type": "integer", "description": "Maximum directory depth to search"},
+                            "mindepth": {"type": "integer", "description": "Minimum directory depth before matching"},
+                            "mtime": {"type": "string", "description": "Modified N days ago: '+7' (>7 days), '-1' (<1 day), '0' (today)"},
+                            "mmin": {"type": "string", "description": "Modified N minutes ago: '+60' (>1hr ago), '-5' (<5min ago)"},
+                            "newer": {"type": "string", "description": "Match files newer than this file path"},
+                            "empty": {"type": "boolean", "description": "Match only empty files or directories"},
+                            "prune": {"type": "array", "items": {"type": "string"}, "description": "Directory names to skip entirely (e.g., ['node_modules', '.git', 'bin'])"},
+                            "print0": {"type": "boolean", "description": "Null-byte separated output (for paths with spaces)"}
                         },
                         "required": ["path"]
                     }
                 },
                 {
                     "name": "grep",
-                    "description": "Search for pattern matches in files. Returns matching lines with file paths and line numbers.",
+                    "description": "Search file contents for patterns. Returns matching lines with file paths and line numbers. Use this to find WHERE something appears in the codebase — function calls, string literals, config values, TODOs, error messages. Supports regex, fixed strings, context lines, and word boundaries.\n\nExamples:\n- Find TODO comments: {pattern: \"TODO\", path: \"src\", glob: \"*.cs\"}\n- Find function definition: {pattern: \"public.*void DoWork\", path: \".\", glob: \"*.cs\", useERE: true}\n- Count matches per file: {pattern: \"import\", path: \"src\", glob: \"*.ts\", count: true}",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "pattern": {"type": "string", "description": "Search pattern (regex)"},
-                            "path": {"type": "string", "description": "File or directory to search"},
-                            "glob": {"type": "string", "description": "Filename filter glob (e.g., '*.cs')"},
-                            "ignoreCase": {"type": "boolean", "default": false},
-                            "invertMatch": {"type": "boolean", "description": "Select non-matching lines (-v)"},
-                            "count": {"type": "boolean", "description": "Print count of matching lines per file (-c)"},
-                            "filesWithMatches": {"type": "boolean", "description": "Print only filenames containing matches (-l)"},
-                            "onlyMatching": {"type": "boolean", "description": "Print only the matched parts (-o)"},
-                            "wholeWord": {"type": "boolean", "description": "Match whole words only (-w)"},
-                            "fixedStrings": {"type": "boolean", "description": "Treat pattern as literal string, not regex (-F)"},
-                            "useERE": {"type": "boolean", "description": "Use extended regular expressions (-E)"},
-                            "contextLines": {"type": "integer", "description": "Lines of context before and after each match (-C)"},
-                            "beforeContext": {"type": "integer", "description": "Lines of context before each match (-B)"},
-                            "afterContext": {"type": "integer", "description": "Lines of context after each match (-A)"},
-                            "maxResults": {"type": "integer", "description": "Maximum number of matching lines to return", "default": 100}
+                            "pattern": {"type": "string", "description": "Search pattern — regex by default, or literal with fixedStrings"},
+                            "path": {"type": "string", "description": "File or directory to search in"},
+                            "glob": {"type": "string", "description": "Only search files matching this glob (e.g., '*.cs', '*.json')"},
+                            "ignoreCase": {"type": "boolean", "description": "Case-insensitive matching"},
+                            "invertMatch": {"type": "boolean", "description": "Return lines that do NOT match"},
+                            "count": {"type": "boolean", "description": "Return count of matches per file instead of lines"},
+                            "filesWithMatches": {"type": "boolean", "description": "Return only file paths that contain a match"},
+                            "onlyMatching": {"type": "boolean", "description": "Return only the matched substring, not the full line"},
+                            "wholeWord": {"type": "boolean", "description": "Match only at word boundaries"},
+                            "fixedStrings": {"type": "boolean", "description": "Treat pattern as a literal string (no regex interpretation)"},
+                            "useERE": {"type": "boolean", "description": "Extended regex: +, ?, |, () without backslash escaping"},
+                            "contextLines": {"type": "integer", "description": "Show N lines before AND after each match"},
+                            "beforeContext": {"type": "integer", "description": "Show N lines before each match"},
+                            "afterContext": {"type": "integer", "description": "Show N lines after each match"},
+                            "maxResults": {"type": "integer", "description": "Stop after this many matching lines (default 100)"}
                         },
                         "required": ["pattern", "path"]
                     }
                 },
                 {
                     "name": "sed",
-                    "description": "Apply sed script transformations to file contents. Can modify files in-place or return transformed content.",
+                    "description": "Transform text with sed scripts — find-and-replace, delete lines, extract ranges. Use this for EDITING file content: renaming variables, updating config values, removing lines, inserting text. Supports in-place editing with backup and dry-run preview.\n\nExamples:\n- Rename a method: {script: \"s/oldMethod/newMethod/g\", file: \"src/App.cs\", inPlace: true}\n- Delete blank lines: {script: \"/^$/d\", file: \"output.txt\"}\n- Preview changes: {script: \"s/http:/https:/g\", file: \"config.yaml\", dryRun: true}\n- Extract lines 10-20: {script: \"10,20!d\", file: \"log.txt\"}",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "script": {"type": "string", "description": "Sed script (e.g., 's/old/new/g')"},
-                            "file": {"type": "string", "description": "Single file to transform"},
+                            "script": {"type": "string", "description": "Sed script: 's/old/new/g' for replace, '/pattern/d' for delete, etc."},
+                            "file": {"type": "string", "description": "File to transform"},
                             "files": {"type": "array", "items": {"type": "string"}, "description": "Multiple files to transform"},
-                            "suppressDefault": {"type": "boolean", "description": "Suppress default output, like sed -n"},
-                            "useEre": {"type": "boolean", "description": "Use extended regular expressions (-E/-r)"},
-                            "inPlace": {"type": "boolean", "description": "Write changes back to file", "default": false},
-                            "backup": {"type": "string", "description": "Backup suffix (e.g., '.bak') when editing in-place"},
-                            "dryRun": {"type": "boolean", "description": "Show diff of what would change without modifying", "default": false}
+                            "input": {"type": "string", "description": "Text input (if no file specified)"},
+                            "suppressDefault": {"type": "boolean", "description": "Suppress auto-print (sed -n mode). Use with /pattern/p to print only matches."},
+                            "useEre": {"type": "boolean", "description": "Extended regex: +, ?, |, () without backslash escaping"},
+                            "inPlace": {"type": "boolean", "description": "Write changes directly to the file(s)"},
+                            "backup": {"type": "string", "description": "Create backup with this suffix before in-place edit (e.g., '.bak')"},
+                            "dryRun": {"type": "boolean", "description": "Show a unified diff of what would change, without modifying anything"}
                         },
                         "required": ["script"]
                     }
                 },
                 {
                     "name": "awk",
-                    "description": "Process file contents with an AWK program. Useful for extracting fields, computing statistics, reformatting data.",
+                    "description": "Process structured text with AWK programs. Use this for COLUMNAR DATA: extracting fields, computing sums/averages, reformatting CSV/TSV, filtering rows by field values. More powerful than grep for structured data.\n\nExamples:\n- Extract 2nd column: {program: \"{print $2}\", file: \"data.tsv\"}\n- Sum a column: {program: \"{sum+=$3} END{print sum}\", file: \"sales.csv\", fieldSeparator: \",\"}\n- Filter rows: {program: \"$3 > 100\", file: \"data.txt\"}\n- Reformat: {program: \"{printf \\\"%s=%s\\\\n\\\", $1, $2}\", file: \"pairs.txt\"}",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "program": {"type": "string", "description": "AWK program (e.g., '{print $1}')"},
-                            "file": {"type": "string", "description": "Single file to process"},
+                            "program": {"type": "string", "description": "AWK program. Patterns: BEGIN{}, /regex/{}, END{}. Fields: $1, $2, ... $NF"},
+                            "file": {"type": "string", "description": "File to process"},
                             "files": {"type": "array", "items": {"type": "string"}, "description": "Multiple files to process"},
-                            "fieldSeparator": {"type": "string", "description": "Field separator character"},
-                            "variables": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Variables to set before execution (-v var=val)"}
+                            "input": {"type": "string", "description": "Text input (if no file specified)"},
+                            "fieldSeparator": {"type": "string", "description": "Field separator (default: whitespace). Use ',' for CSV, '\\t' for TSV."},
+                            "variables": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Variables to set before execution (AWK -v var=val)"}
                         },
                         "required": ["program"]
                     }
                 },
                 {
+                    "name": "jq",
+                    "description": "Query and transform JSON data. Use this for ANYTHING JSON: parsing API responses, extracting values from config files (package.json, tsconfig.json, etc.), restructuring data, filtering arrays. Understands nested objects, arrays, and has 80+ builtins.\n\nExamples:\n- Extract a field: {expression: \".name\", input: \"{\\\"name\\\": \\\"fred\\\"}\"}\n- List dependencies: {expression: \".dependencies | keys[]\", file: \"package.json\"}\n- Filter array: {expression: \"[.[] | select(.age > 21)]\", file: \"users.json\"}\n- Transform: {expression: \"{name: .title, url: .html_url}\", file: \"repo.json\", rawOutput: true}\n- Extract from nested: {expression: \".results[].items[] | .id\", file: \"data.json\"}",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "expression": {"type": "string", "description": "jq expression: . (identity), .field, .[0], .[] (iterate), | (pipe), select(), map(), keys, etc."},
+                            "file": {"type": "string", "description": "JSON file to process"},
+                            "input": {"type": "string", "description": "JSON string input (if no file specified)"},
+                            "rawOutput": {"type": "boolean", "description": "Output raw strings without JSON quotes (like jq -r)"},
+                            "compactOutput": {"type": "boolean", "description": "One-line output, no pretty-printing (like jq -c)"},
+                            "sortKeys": {"type": "boolean", "description": "Sort object keys alphabetically"},
+                            "slurp": {"type": "boolean", "description": "Read all inputs into a single array first"},
+                            "nullInput": {"type": "boolean", "description": "Don't read input — start with null (useful with env, $ENV)"},
+                            "args": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Bind string variables: {\"name\": \"fred\"} makes $name available"},
+                            "jsonArgs": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Bind JSON variables: {\"config\": \"{...}\"} makes $config available"}
+                        },
+                        "required": ["expression"]
+                    }
+                },
+                {
+                    "name": "curl",
+                    "description": "Make HTTP requests. Use this to fetch URLs, test APIs, download files, post JSON — anything that needs network access. Supports all HTTP methods, headers, auth, redirects, and structured output.\n\nExamples:\n- GET a URL: {url: \"https://api.example.com/data\"}\n- POST JSON: {url: \"https://api.example.com/items\", method: \"POST\", json: \"{\\\"name\\\": \\\"test\\\"}\"}\n- With auth: {url: \"https://api.example.com/me\", bearerToken: \"tok_xxx\"}\n- Download file: {url: \"https://example.com/file.zip\", outputFile: \"file.zip\"}\n- Get status code: {url: \"https://example.com\", writeOut: \"%{http_code}\", silent: true}",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string", "description": "URL to request"},
+                            "method": {"type": "string", "enum": ["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"], "description": "HTTP method (default: GET, or POST when data/json is set)"},
+                            "headers": {"type": "array", "items": {"type": "string"}, "description": "Request headers as 'Name: Value' strings"},
+                            "data": {"type": "string", "description": "Request body (sets method to POST if not specified)"},
+                            "json": {"type": "string", "description": "JSON request body (auto-sets Content-Type and Accept to application/json)"},
+                            "basicAuth": {"type": "string", "description": "Basic auth as 'user:password'"},
+                            "bearerToken": {"type": "string", "description": "Bearer token for Authorization header"},
+                            "outputFile": {"type": "string", "description": "Save response body to this file"},
+                            "includeHeaders": {"type": "boolean", "description": "Include HTTP response headers in output"},
+                            "headOnly": {"type": "boolean", "description": "Show response headers only (HEAD request)"},
+                            "followRedirects": {"type": "boolean", "description": "Follow HTTP redirects (3xx)"},
+                            "maxRedirects": {"type": "integer", "description": "Maximum number of redirects to follow (default: 50)"},
+                            "maxTime": {"type": "integer", "description": "Maximum total time in seconds"},
+                            "connectTimeout": {"type": "integer", "description": "Connection timeout in seconds"},
+                            "insecure": {"type": "boolean", "description": "Skip TLS certificate verification"},
+                            "compressed": {"type": "boolean", "description": "Request and auto-decompress gzip/deflate/brotli responses"},
+                            "silent": {"type": "boolean", "description": "Suppress error messages"},
+                            "failOnError": {"type": "boolean", "description": "Return exit code 22 for HTTP 4xx/5xx errors"},
+                            "writeOut": {"type": "string", "description": "Format string output after transfer. Codes: %{http_code}, %{size_download}, %{time_total}, %{content_type}, %{url_effective}"},
+                            "userAgent": {"type": "string", "description": "User-Agent header value"},
+                            "retry": {"type": "integer", "description": "Number of retries on transient failure"},
+                            "retryDelay": {"type": "integer", "description": "Seconds between retries"},
+                            "verbose": {"type": "boolean", "description": "Show request/response headers on stderr"}
+                        },
+                        "required": ["url"]
+                    }
+                },
+                {
                     "name": "pipeline",
-                    "description": "Execute an array of stages: find, grep, sed, awk. Each stage feeds its output to the next. The first stage can be a find (returns file list) or any text stage reading from input. Supports in-place file editing and dry-run diffs.",
+                    "description": "Chain multiple tools into a single operation: find files, then grep/sed/awk/jq/edit them in sequence. The output of each stage feeds into the next. Start with 'find' to select files, then transform their contents. Supports in-place editing and dry-run preview.\n\nExamples:\n- Find and replace across codebase: {stages: [{tool:\"find\", path:\"src\", name:\"*.cs\", type:\"f\"}, {tool:\"sed\", script:\"s/oldAPI/newAPI/g\"}], inPlace: true}\n- Find JSON configs and extract a field: {stages: [{tool:\"find\", path:\".\", name:\"*.json\", type:\"f\"}, {tool:\"jq\", expression:\".version\"}]}\n- Search and transform: {stages: [{tool:\"find\", path:\".\", name:\"*.ts\"}, {tool:\"grep\", pattern:\"deprecated\"}, {tool:\"awk\", program:\"{print FILENAME \\\":\\\" NR}\"}]}\n- Literal string replace: {stages: [{tool:\"find\", path:\".\", name:\"*.md\"}, {tool:\"edit\", old:\"v1.0\", new:\"v2.0\", replaceAll:true}], inPlace: true}",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "stages": {
                                 "type": "array",
-                                "description": "Ordered array of processing stages. Each stage has a 'tool' key and tool-specific options.",
+                                "description": "Ordered processing stages. First can be 'find' (produces file list); rest transform content.",
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "tool": {"type": "string", "enum": ["find", "grep", "sed", "awk", "edit"], "description": "Which tool to run at this stage"},
+                                        "tool": {"type": "string", "enum": ["find", "grep", "sed", "awk", "jq", "edit"], "description": "Tool for this stage"},
                                         "path": {"type": "string", "description": "find: starting directory"},
                                         "name": {"type": "string", "description": "find: filename glob pattern"},
                                         "iname": {"type": "string", "description": "find: case-insensitive glob"},
                                         "type": {"type": "string", "enum": ["f", "d", "l"], "description": "find: file type"},
                                         "size": {"type": "string", "description": "find: size filter"},
-                                        "maxdepth": {"type": "integer", "description": "find: max directory depth"},
-                                        "mindepth": {"type": "integer", "description": "find: min directory depth"},
+                                        "maxdepth": {"type": "integer", "description": "find: max depth"},
+                                        "mindepth": {"type": "integer", "description": "find: min depth"},
                                         "prune": {"type": "array", "items": {"type": "string"}, "description": "find: directories to skip"},
                                         "pattern": {"type": "string", "description": "grep: search pattern"},
                                         "ignoreCase": {"type": "boolean", "description": "grep: case-insensitive"},
@@ -528,20 +584,24 @@ public static class McpServer
                                         "fixedStrings": {"type": "boolean", "description": "grep: literal string match"},
                                         "useERE": {"type": "boolean", "description": "grep/sed: extended regex"},
                                         "script": {"type": "string", "description": "sed: transformation script"},
-                                        "suppressDefault": {"type": "boolean", "description": "sed: suppress default output (-n)"},
+                                        "suppressDefault": {"type": "boolean", "description": "sed: suppress auto-print (-n)"},
                                         "program": {"type": "string", "description": "awk: AWK program"},
                                         "fieldSeparator": {"type": "string", "description": "awk: field separator"},
                                         "variables": {"type": "object", "additionalProperties": {"type": "string"}, "description": "awk: variables"},
-                                        "old": {"type": "string", "description": "edit: exact string to find (literal, no regex)"},
+                                        "expression": {"type": "string", "description": "jq: jq expression"},
+                                        "rawOutput": {"type": "boolean", "description": "jq: raw string output"},
+                                        "compactOutput": {"type": "boolean", "description": "jq: compact one-line output"},
+                                        "sortKeys": {"type": "boolean", "description": "jq: sort object keys"},
+                                        "old": {"type": "string", "description": "edit: exact string to find (no regex)"},
                                         "new": {"type": "string", "description": "edit: replacement string"},
-                                        "replaceAll": {"type": "boolean", "description": "edit: replace all occurrences (default: first only)", "default": false}
+                                        "replaceAll": {"type": "boolean", "description": "edit: replace all occurrences (default: first only)"}
                                     },
                                     "required": ["tool"]
                                 }
                             },
-                            "inPlace": {"type": "boolean", "description": "Write changes back to files found by find stage", "default": false},
-                            "backup": {"type": "string", "description": "Backup suffix when editing in-place (e.g. '.bak')"},
-                            "dryRun": {"type": "boolean", "description": "Show unified diff without modifying files", "default": false}
+                            "inPlace": {"type": "boolean", "description": "Write changes back to the files found by find stage"},
+                            "backup": {"type": "string", "description": "Backup suffix for in-place edits (e.g., '.bak')"},
+                            "dryRun": {"type": "boolean", "description": "Show unified diff of what would change, without modifying files"}
                         },
                         "required": ["stages"]
                     }
@@ -579,6 +639,8 @@ public static class McpServer
                 "grep" => ExecuteGrep(arguments),
                 "sed" => ExecuteSed(arguments),
                 "awk" => ExecuteAwk(arguments),
+                "jq" => ExecuteJq(arguments),
+                "curl" => ExecuteCurl(arguments),
                 "pipeline" => ExecutePipeline(arguments),
                 _ => throw new InvalidOperationException($"Unknown tool: {toolName}"),
             };
@@ -1092,6 +1154,140 @@ public static class McpServer
         return compiled;
     }
 
+    private static string ExecuteJq(JsonElement? args)
+    {
+        if (args == null)
+            throw new ArgumentException("Missing arguments for jq");
+
+        var a = args.Value;
+
+        string expression = a.TryGetProperty("expression", out var exprEl)
+            ? exprEl.GetString() ?? ""
+            : throw new ArgumentException("Missing expression");
+
+        var options = new JqOptions();
+        if (a.TryGetProperty("rawOutput", out var roEl) && roEl.GetBoolean()) options.RawOutput = true;
+        if (a.TryGetProperty("compactOutput", out var coEl) && coEl.GetBoolean()) options.CompactOutput = true;
+        if (a.TryGetProperty("sortKeys", out var skEl) && skEl.GetBoolean()) options.SortKeys = true;
+        if (a.TryGetProperty("slurp", out var slEl) && slEl.GetBoolean()) options.Slurp = true;
+        if (a.TryGetProperty("nullInput", out var niEl) && niEl.GetBoolean()) options.NullInput = true;
+
+        // Bind string args
+        if (a.TryGetProperty("args", out var argsObj) && argsObj.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in argsObj.EnumerateObject())
+            {
+                string? val = prop.Value.GetString();
+                if (val != null) options.StringArgs[prop.Name] = val;
+            }
+        }
+
+        // Bind JSON args
+        if (a.TryGetProperty("jsonArgs", out var jsonArgsObj) && jsonArgsObj.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in jsonArgsObj.EnumerateObject())
+            {
+                string? val = prop.Value.GetString();
+                if (val != null) options.JsonArgs[prop.Name] = val;
+            }
+        }
+
+        // Get input: from file, from input string, or null input
+        string jsonInput;
+        if (a.TryGetProperty("file", out var fileEl))
+        {
+            string? filePath = fileEl.GetString();
+            if (filePath == null) throw new ArgumentException("file must be a string");
+            jsonInput = File.ReadAllText(filePath);
+        }
+        else if (a.TryGetProperty("input", out var inputEl))
+        {
+            jsonInput = inputEl.GetString() ?? "";
+        }
+        else if (options.NullInput)
+        {
+            jsonInput = "null";
+        }
+        else
+        {
+            throw new ArgumentException("Missing file, input, or nullInput");
+        }
+
+        var compiled = GetOrCompileJq(expression);
+        var (result, _) = compiled.Execute(jsonInput, options);
+        return result;
+    }
+
+    /// <summary>
+    /// Gets a cached JqScript or compiles and caches a new one.
+    /// </summary>
+    private static JqScript GetOrCompileJq(string expression)
+    {
+        if (s_jqCache.TryGet(expression, out var cached))
+        {
+            Console.Error.WriteLine($"{ServerName}: jq cache hit for '{expression}'");
+            return cached;
+        }
+
+        Console.Error.WriteLine($"{ServerName}: jq cache miss, compiling '{expression}'");
+        var compiled = JqEngine.Compile(expression);
+        s_jqCache.Set(expression, compiled);
+        return compiled;
+    }
+
+    private static string ExecuteCurl(JsonElement? args)
+    {
+        if (args == null)
+            throw new ArgumentException("Missing arguments for curl");
+
+        var a = args.Value;
+
+        string url = a.TryGetProperty("url", out var urlEl)
+            ? urlEl.GetString() ?? ""
+            : throw new ArgumentException("Missing url");
+
+        var options = new CurlOptions { Url = url };
+
+        if (a.TryGetProperty("method", out var mEl)) options.Method = mEl.GetString() ?? "GET";
+        if (a.TryGetProperty("data", out var dEl)) options.Data = dEl.GetString();
+        if (a.TryGetProperty("json", out var jEl)) options.JsonData = jEl.GetString();
+        if (a.TryGetProperty("basicAuth", out var baEl)) options.BasicAuth = baEl.GetString();
+        if (a.TryGetProperty("bearerToken", out var btEl)) options.BearerToken = btEl.GetString();
+        if (a.TryGetProperty("outputFile", out var ofEl)) options.OutputFile = ofEl.GetString();
+        if (a.TryGetProperty("userAgent", out var uaEl)) options.UserAgent = uaEl.GetString();
+        if (a.TryGetProperty("writeOut", out var woEl)) options.WriteOutFormat = woEl.GetString();
+        if (a.TryGetProperty("includeHeaders", out var ihEl) && ihEl.GetBoolean()) options.IncludeHeaders = true;
+        if (a.TryGetProperty("headOnly", out var hoEl) && hoEl.GetBoolean()) options.HeadOnly = true;
+        if (a.TryGetProperty("followRedirects", out var frEl) && frEl.GetBoolean()) options.FollowRedirects = true;
+        if (a.TryGetProperty("insecure", out var ikEl) && ikEl.GetBoolean()) options.Insecure = true;
+        if (a.TryGetProperty("compressed", out var cpEl) && cpEl.GetBoolean()) options.Compressed = true;
+        if (a.TryGetProperty("silent", out var slnEl) && slnEl.GetBoolean()) options.Silent = true;
+        if (a.TryGetProperty("failOnError", out var feEl) && feEl.GetBoolean()) options.FailOnError = true;
+        if (a.TryGetProperty("verbose", out var vbEl) && vbEl.GetBoolean()) options.Verbose = true;
+        if (a.TryGetProperty("maxTime", out var mtEl)) options.MaxTimeSeconds = mtEl.GetInt32();
+        if (a.TryGetProperty("connectTimeout", out var ctEl)) options.ConnectTimeoutSeconds = ctEl.GetInt32();
+        if (a.TryGetProperty("maxRedirects", out var mrEl)) options.MaxRedirects = mrEl.GetInt32();
+        if (a.TryGetProperty("retry", out var rtEl)) options.Retry = rtEl.GetInt32();
+        if (a.TryGetProperty("retryDelay", out var rdEl)) options.RetryDelay = rdEl.GetInt32();
+
+        if (a.TryGetProperty("headers", out var hdrsEl) && hdrsEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in hdrsEl.EnumerateArray())
+            {
+                string? h = item.GetString();
+                if (h != null) options.Headers.Add(h);
+            }
+        }
+
+        var compiled = CurlEngine.Compile(options);
+        var (result, exitCode) = compiled.Execute();
+
+        if (exitCode != 0)
+            throw new InvalidOperationException($"curl exited with code {exitCode}: {result}");
+
+        return result;
+    }
+
     private static string ExecutePipeline(JsonElement? args)
     {
         if (args == null)
@@ -1235,6 +1431,12 @@ public static class McpServer
                         current = awkOut;
                         break;
                     }
+                    case "jq":
+                    {
+                        var (jqOut, _) = cs.Jq!.Execute(current, cs.JqOptions ?? new JqOptions());
+                        current = jqOut;
+                        break;
+                    }
                     case "edit":
                     {
                         if (cs.EditReplaceAll)
@@ -1256,9 +1458,10 @@ public static class McpServer
 
             result.FilesMatched++;
 
-            // Determine if the last stage was a transformation (sed/awk/edit) or a filter (grep)
+            // Determine if the last stage was a transformation (sed/awk/jq/edit) or a filter (grep)
             bool hasTransform = compiledStages.Count > 0 &&
-                (compiledStages[^1].Tool == "sed" || compiledStages[^1].Tool == "awk" || compiledStages[^1].Tool == "edit");
+                (compiledStages[^1].Tool == "sed" || compiledStages[^1].Tool == "awk" ||
+                 compiledStages[^1].Tool == "jq" || compiledStages[^1].Tool == "edit");
 
             if (hasTransform && (inPlace || dryRun))
             {
@@ -1409,6 +1612,18 @@ public static class McpServer
                 var compiled = GetOrCompileAwk(program);
                 return new CompiledStage("awk") { Awk = compiled, AwkFieldSep = fieldSep, AwkVariables = variables };
             }
+            case "jq":
+            {
+                string expression = s.TryGetProperty("expression", out var eEl)
+                    ? eEl.GetString() ?? ""
+                    : throw new ArgumentException("jq stage requires 'expression'");
+                bool rawOutput = s.TryGetProperty("rawOutput", out var roEl) && roEl.GetBoolean();
+                bool compactOutput = s.TryGetProperty("compactOutput", out var coEl) && coEl.GetBoolean();
+                bool sortKeys = s.TryGetProperty("sortKeys", out var skEl) && skEl.GetBoolean();
+                var jqOpts = new JqOptions { RawOutput = rawOutput, CompactOutput = compactOutput, SortKeys = sortKeys };
+                var compiled = GetOrCompileJq(expression);
+                return new CompiledStage("jq") { Jq = compiled, JqOptions = jqOpts };
+            }
             case "edit":
             {
                 string old = s.TryGetProperty("old", out var oEl)
@@ -1453,6 +1668,8 @@ public static class McpServer
         public AwkScript? Awk { get; init; }
         public string? AwkFieldSep { get; init; }
         public Dictionary<string, string>? AwkVariables { get; init; }
+        public JqScript? Jq { get; init; }
+        public JqOptions? JqOptions { get; init; }
         public string? EditOld { get; init; }
         public string? EditNew { get; init; }
         public bool EditReplaceAll { get; init; }
